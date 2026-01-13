@@ -1,0 +1,97 @@
+# AIG-Kernel-Eval Framework Configuration
+# ========================================
+# This is the framework configuration file.
+# Kernel-specific configurations are separate (see kernel_config.yaml.example)
+
+# =============================================================================
+# GPU Configuration
+# =============================================================================
+# This section is the SINGLE source of truth for all GPU-related settings.
+# Used by: scheduler, hardware controller, profiler
+gpu:
+  # List of GPU device IDs to use (null = all available GPUs)
+  device_ids: [0]           # e.g., [0, 1, 2, 3] for specific GPUs
+  
+  # Whether to apply operations in parallel (faster for multi-GPU)
+  parallel: true
+  
+  # Hardware control settings (power/frequency management)
+  hardware:
+    # Enable hardware control
+    enabled: false
+    
+    # Reset clocks after benchmark
+    reset_after_benchmark: true
+    
+    # Default configuration applied to all GPUs (unless overridden per-GPU)
+    default:
+      # Power configuration (requires root/sudo)
+      power:
+        limit_watts: null      # Power limit in watts (null = don't change)
+        
+      # Frequency configuration
+      frequency:
+        # For NVIDIA: lock clocks to range (min, max) in MHz
+        gpu_clock_mhz: null    # e.g., [1500, 1500] to lock at 1500 MHz
+        mem_clock_mhz: null    # e.g., [1215, 1215] to lock memory clock
+        # For AMD: clock levels (0-7, where 7 is highest)
+        gpu_clock_level: null  # e.g., 7 for maximum performance
+        mem_clock_level: null  # e.g., 3 for specific level
+    
+    # Per-GPU configurations (overrides default for specific GPUs)
+    # Example:
+    # per_gpu:
+    #   0:  # GPU 0 specific settings
+    #     power:
+    #       limit_watts: 300
+    #     frequency:
+    #       gpu_clock_mhz: [1800, 1800]
+    #   1:  # GPU 1 specific settings
+    #     power:
+    #       limit_watts: 250
+    per_gpu: {}
+
+# =============================================================================
+# Output Settings
+# =============================================================================
+output:
+  directory: ./results
+  format: json  # json, csv, markdown
+
+# =============================================================================
+# Logging
+# =============================================================================
+logging:
+  level: INFO  # DEBUG, INFO, WARNING, ERROR
+  file: null   # Set path for file logging
+
+# =============================================================================
+# Performance Profiling
+# =============================================================================
+performance:
+  # Timeout for profiling operations (seconds)
+  timeout_seconds: 120
+  
+  # rocprof-compute settings (AMD GPU)
+  # Additional arguments passed to rocprof-compute
+  rocprof_compute:
+    args: []
+    
+  # ncu settings (NVIDIA GPU)
+  # Additional arguments passed to ncu
+  ncu:
+    args: ["--target-processes", "all"]
+
+# =============================================================================
+# Scheduler
+# =============================================================================
+# Note: GPU devices are now configured in the 'gpu' section above.
+# The scheduler will use gpu.device_ids automatically.
+scheduler:
+  max_concurrent_tasks: 1
+  environment: local  # local, docker
+  
+  # Retry settings
+  retry:
+    enabled: true
+    max_retries: 3

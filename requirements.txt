@@ -1,0 +1,20 @@
+# Core dependencies
+PyYAML>=6.0
+numpy>=1.24.0
+
+# MCP (Model Context Protocol) Server
+mcp>=1.0.0
+
+# GPU/CUDA support (uncomment based on your setup)
+# torch>=2.0.0
+# triton>=2.1.0
+
+# Optional: Performance profiling
+# py-spy>=0.3.14
+# memory-profiler>=0.61.0
+
+# Optional: ROCm/HIP profiling integration
+# see https://rocm.docs.amd.com/projects/rocprofiler-compute/en/latest/install/core-install.html
+
+# Optional: CUDA profiling integration
+# see https://docs.nvidia.com/nsight-compute/NsightComputeCli/index.html
