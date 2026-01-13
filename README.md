@@ -1,4 +1,4 @@
-# AIG-Kernel-Eval
+# Magpie
 
 A lightweight, general-purpose framework for evaluating GPU kernel correctness and performance.
 
@@ -18,10 +18,13 @@ A lightweight, general-purpose framework for evaluating GPU kernel correctness a
 make install
 
 # Analyze a kernel
-python main.py analyze -k kernel_config.yaml
+python -m Magpie analyze -k Magpie/kernel_config.yaml
 
 # Compare kernels
-python main.py compare kernel_v1.hip kernel_v2.hip
+python -m Magpie compare kernel_v1.hip kernel_v2.hip
+
+# Run MCP server
+python -m Magpie.mcp
 ```
 
 ## Evaluation Modes
@@ -34,7 +37,7 @@ python main.py compare kernel_v1.hip kernel_v2.hip
 
 ## Configuration
 
-### Framework Config (`config.yaml`)
+### Framework Config (`Magpie/config.yaml`)
 
 ```yaml
 gpu:
@@ -52,11 +55,11 @@ performance:
 
 ### Kernel Config
 
-See [`kernel_config.yaml.example`](./kernel_config.yaml.example) for full examples.
+See [`Magpie/kernel_config.yaml.example`](./Magpie/kernel_config.yaml.example) for full examples.
 
 ## MCP Server
 
-MCP configuration example: [`mcp_config.json`](./mcp_config.json)
+MCP configuration example: [`Magpie/mcp/config.json`](./Magpie/mcp/config.json)
 
 Available tools:
 - `analyze` - Analyze kernel correctness and performance
@@ -67,18 +70,33 @@ Available tools:
 ## Project Structure
 
 ```
-├── config.yaml              # Framework configuration
-├── main.py                  # CLI entry point
-├── src/
-│   ├── config/              # Configuration classes
-│   ├── eval/                # Evaluation pipeline
-│   │   ├── compiling.py     # Kernel compilation
-│   │   ├── correctness.py   # Correctness verification
-│   │   └── performance.py   # Performance profiling
-│   ├── modes/               # Evaluation modes
-│   │   ├── analyze_eval/    # Single kernel analysis
-│   │   └── compare_eval/    # Multi-kernel comparison
-│   └── mcp/                 # MCP server
+├── README.md
+├── LICENSE
+├── .gitignore
+├── requirements.txt
+├── Makefile
+└── Magpie/
+    ├── __init__.py          # Package initialization
+    ├── __main__.py          # Entry point for python -m Magpie
+    ├── main.py              # CLI implementation
+    ├── config.yaml           # Framework configuration
+    ├── kernel_config.yaml.example
+    ├── examples/            # Example configurations
+    ├── config/               # Configuration classes
+    ├── core/                # Core engine components
+    ├── eval/                # Evaluation pipeline
+    │   ├── compiling.py     # Kernel compilation
+    │   ├── correctness.py   # Correctness verification
+    │   └── performance.py   # Performance profiling
+    ├── modes/               # Evaluation modes
+    │   ├── analyze_eval/    # Single kernel analysis
+    │   └── compare_eval/    # Multi-kernel comparison
+    ├── mcp/                 # MCP Server
+    │   ├── __init__.py
+    │   ├── __main__.py      # Entry point for python -m Magpie.mcp
+    │   ├── server.py        # MCP server implementation
+    │   └── config.json       # MCP client configuration
+    └── utils/               # Utility functions
 ```
 
 ## Pipeline (Analyze & Compare)

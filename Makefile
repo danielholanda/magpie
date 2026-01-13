@@ -1,4 +1,4 @@
-# AIG-Kernel-Eval Makefile
+# Magpie Makefile
 # ========================
 # Shortcuts for environment setup and common operations.
 
@@ -6,7 +6,7 @@
 
 # Default target
 help:
-	@echo "AIG-Kernel-Eval - GPU Kernel Evaluation Framework"
+	@echo "Magpie - GPU Kernel Evaluation Framework"
 	@echo ""
 	@echo "Setup Commands:"
 	@echo "  make install       - Install production dependencies"
@@ -50,18 +50,18 @@ install-dev: install
 
 # Run linter
 lint:
-	$(PYTHON_VENV) -m ruff check src/ main.py
-	$(PYTHON_VENV) -m mypy src/ main.py --ignore-missing-imports
+	$(PYTHON_VENV) -m ruff check Magpie/
+	$(PYTHON_VENV) -m mypy Magpie/ --ignore-missing-imports
 
 # Format code
 format:
-	$(PYTHON_VENV) -m black src/ main.py
-	$(PYTHON_VENV) -m isort src/ main.py
+	$(PYTHON_VENV) -m black Magpie/
+	$(PYTHON_VENV) -m isort Magpie/
 
 # Clean build artifacts
 clean:
 	rm -rf __pycache__ .pytest_cache .mypy_cache .ruff_cache
-	rm -rf src/__pycache__ src/**/__pycache__
+	rm -rf Magpie/__pycache__ Magpie/**/__pycache__
 	rm -rf *.egg-info build dist
 	rm -rf results/
 	find . -type f -name "*.pyc" -delete
@@ -73,7 +73,7 @@ ifndef KERNEL
 	@echo "Error: KERNEL is not set. Usage: make run-analyze KERNEL=path/to/kernel.py"
 	@exit 1
 endif
-	$(PYTHON_VENV) main.py analyze $(KERNEL)
+	$(PYTHON_VENV) -m Magpie analyze $(KERNEL)
 
 # Run compare mode
 run-compare:
@@ -85,10 +85,10 @@ ifndef K2
 	@echo "Error: K2 is not set. Usage: make run-compare K1=kernel1.py K2=kernel2.py"
 	@exit 1
 endif
-	$(PYTHON_VENV) main.py compare $(K1) $(K2)
+	$(PYTHON_VENV) -m Magpie compare $(K1) $(K2)
 
 # Docker configuration
-DOCKER_IMAGE ?= aig-kernel-eval
+DOCKER_IMAGE ?= magpie
 DOCKER_TAG ?= latest
 
 # Build Docker image
@@ -104,6 +104,6 @@ docker-run:
 
 # Verify installation
 verify:
-	$(PYTHON_VENV) -c "from src.core import Executor, Scheduler; print('Core modules OK')"
-	$(PYTHON_VENV) -c "from src.modes import AnalyzeEvaluator, CompareEvaluator; print('Mode modules OK')"
+	$(PYTHON_VENV) -c "from Magpie.core import Executor, Scheduler; print('Core modules OK')"
+	$(PYTHON_VENV) -c "from Magpie.modes import AnalyzeMode, CompareMode; print('Mode modules OK')"
 	@echo "Installation verified successfully!"
