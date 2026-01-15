@@ -1,60 +1,68 @@
 """
-Execution engine for kernel evaluation.
+Executor implementations for kernel evaluation.
 
-This module provides a unified interface for running evaluations,
-handling result saving, and generating summaries.
+This module provides:
+- BaseExecutor: Abstract base class for executors
+- LocalExecutor: Execute tasks locally with multiprocessing
+- ContainerExecutor: Execute tasks in Docker containers
 """
 
-import json
 import logging
-from dataclasses import dataclass
-from datetime import datetime
+import subprocess
+import time
+from abc import ABC, abstractmethod
+from concurrent.futures import ProcessPoolExecutor, Future, as_completed
+from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
-from .scheduler import Scheduler, WorkloadConfig
-from ..config import EvalMode, PipelineConfig, KernelEvalConfig
-from ..eval import Evaluator, EvaluationState, BaseKind
+from .task import Task, TaskResult, TaskStatus, ModeType
+from ..config import KernelEvalConfig
 
 logger = logging.getLogger(__name__)
+
+
+class ExecutorType(Enum):
+    """Type of executor."""
+    LOCAL = "local"
+    CONTAINER = "container"
+    # Future: DISTRIBUTED = "distributed"
 
 
 @dataclass
 class ExecutorConfig:
     """
-    Configuration for the executor.
+    Configuration for executors.
     
     Attributes:
-        mode: Evaluation mode (analyze or compare)
-        pipeline_config: Pipeline configuration for evaluation
-        output_dir: Directory for output files
-        output_format: Output format (json, csv, markdown)
-        verbose: Enable verbose logging
-        workload_config: Scheduler configuration
+        executor_type: Type of executor
+        max_workers: Maximum number of concurrent workers
+        gpu_devices: List of GPU device IDs to use
+        docker_image: Docker image for container executor
+        timeout_seconds: Default timeout for task execution
     """
-    mode: EvalMode = EvalMode.ANALYZE
-    pipeline_config: Optional[PipelineConfig] = None
-    output_dir: Path = Path("./results")
-    output_format: str = "json"
-    verbose: bool = False
-    workload_config: Optional[WorkloadConfig] = None
-
-    def __post_init__(self):
-        if isinstance(self.output_dir, str):
-            self.output_dir = Path(self.output_dir)
-        if self.pipeline_config is None:
-            self.pipeline_config = PipelineConfig()
-
-
-class Executor:
-    """
-    Main execution engine for kernel evaluation.
+    executor_type: ExecutorType = ExecutorType.LOCAL
+    max_workers: int = 1
+    gpu_devices: List[int] = field(default_factory=lambda: [0])
+    docker_image: Optional[str] = None
+    timeout_seconds: float = 300.0
     
-    Supports:
-    - ANALYZE mode: Evaluate one or more kernels with testcase
-    - COMPARE mode: Compare multiple kernels
-    """
+    def __post_init__(self):
+        if isinstance(self.executor_type, str):
+            self.executor_type = ExecutorType(self.executor_type)
 
+
+class BaseExecutor(ABC):
+    """
+    Abstract base class for task executors.
+    
+    Executors are responsible for:
+    - Executing tasks (running evaluation modes)
+    - Managing worker processes
+    - Handling task lifecycle
+    """
+    
     def __init__(self, config: ExecutorConfig):
         """
         Initialize the executor.
@@ -63,179 +71,568 @@ class Executor:
             config: Executor configuration
         """
         self.config = config
-        self._setup_logging()
+        self._is_running = False
+        self._pending_tasks: Dict[str, Task] = {}
+        self._futures: Dict[str, Future] = {}
         
-        workload_config = config.workload_config or WorkloadConfig()
-        self.scheduler = Scheduler(workload_config)
-        
-        # Initialize the evaluator
-        self.evaluator = Evaluator(config.pipeline_config)
-        
-    def _setup_logging(self) -> None:
-        """Configure logging based on verbosity setting."""
-        level = logging.DEBUG if self.config.verbose else logging.INFO
-        logging.basicConfig(
-            level=level,
-            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-        )
-
-    def prepare(self) -> bool:
+    @abstractmethod
+    def start(self) -> bool:
         """
-        Prepare the execution environment.
+        Start the executor.
         
         Returns:
-            True if preparation succeeded, False otherwise
+            True if started successfully, False otherwise
         """
-        self.config.output_dir.mkdir(parents=True, exist_ok=True)
-        return self.scheduler.prepare_environment()
-
-    def evaluate(self, kernel_cfg: KernelEvalConfig) -> EvaluationState:
+        pass
+    
+    @abstractmethod
+    def stop(self) -> None:
+        """Stop the executor and cleanup resources."""
+        pass
+    
+    @abstractmethod
+    def submit(self, task: Task) -> str:
         """
-        Evaluate a single kernel.
+        Submit a task for execution.
         
         Args:
-            kernel_cfg: Kernel configuration
+            task: Task to execute
             
         Returns:
-            EvaluationState with evaluation results
+            Task ID
         """
-        logger.info(f"Evaluating kernel: {kernel_cfg.kernel_id}")
-        return self.evaluator.evaluate(kernel_cfg)
-
-    def evaluate_all(
-        self, 
-        kernel_configs: List[KernelEvalConfig]
-    ) -> List[EvaluationState]:
+        pass
+    
+    @abstractmethod
+    def execute(self, task: Task) -> TaskResult:
         """
-        Evaluate multiple kernels.
-        
-        Works for both ANALYZE and COMPARE modes.
+        Execute a task synchronously.
         
         Args:
-            kernel_configs: List of kernel configurations
+            task: Task to execute
             
         Returns:
-            List of EvaluationState results
+            TaskResult with execution results
         """
-        logger.info(f"Evaluating {len(kernel_configs)} kernels")
+        pass
+    
+    def get_task_status(self, task_id: str) -> Optional[TaskStatus]:
+        """
+        Get the status of a task.
         
+        Args:
+            task_id: Task ID
+            
+        Returns:
+            Task status or None if not found
+        """
+        if task_id in self._pending_tasks:
+            return self._pending_tasks[task_id].status
+        return None
+    
+    def is_running(self) -> bool:
+        """Check if executor is running."""
+        return self._is_running
+
+
+def _execute_task_worker(task_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Worker function for executing tasks in separate processes.
+    
+    This function is pickled and sent to worker processes.
+    
+    Args:
+        task_dict: Serialized task data
+        
+    Returns:
+        Serialized TaskResult
+    """
+    import time
+    from .task import Task, TaskResult, TaskStatus, ModeType, ModeConfig
+    from ..config import KernelEvalConfig
+    from ..modes import AnalyzeMode, CompareMode
+    from ..modes.analyze_eval.analyzer import AnalyzeConfig
+    from ..modes.compare_eval.comparator import CompareConfig
+    
+    start_time = time.time()
+    task_id = task_dict["task_id"]
+    errors = []
+    results = None
+    
+    try:
+        # Reconstruct kernel configs
+        kernel_configs = []
+        for cfg_data in task_dict["kernel_configs"]:
+            if isinstance(cfg_data, dict):
+                kernel_configs.append(KernelEvalConfig(**cfg_data))
+            else:
+                kernel_configs.append(cfg_data)
+        
+        # Get mode config
+        mode_cfg = task_dict["mode_config"]
+        mode_type = ModeType(mode_cfg["mode_type"])
+        
+        if mode_type == ModeType.ANALYZE:
+            # Create analyzer
+            analyze_config = AnalyzeConfig(
+                kernel_type=kernel_configs[0].kernel_type if kernel_configs else None,
+                check_performance=mode_cfg.get("check_performance", True),
+                timeout_seconds=mode_cfg.get("timeout_seconds", 60.0),
+                profiler_args=mode_cfg.get("profiler_args", []),
+                gpu_arch=mode_cfg.get("gpu_arch", "gfx942"),
+            )
+            analyzer = AnalyzeMode(analyze_config)
+            
+            # Execute analysis
+            results = []
+            for kernel_cfg in kernel_configs:
+                result = analyzer.analyze(kernel_cfg)
+                results.append(result)
+                
+        elif mode_type == ModeType.COMPARE:
+            # Create comparator
+            compare_config = CompareConfig(
+                baseline_index=mode_cfg.get("baseline_index", 0),
+                check_performance=mode_cfg.get("check_performance", True),
+                timeout_seconds=mode_cfg.get("timeout_seconds", 60.0),
+                profiler_args=mode_cfg.get("profiler_args", []),
+                gpu_arch=mode_cfg.get("gpu_arch", "gfx942"),
+            )
+            comparator = CompareMode(compare_config)
+            
+            # Execute comparison
+            results = comparator.compare(kernel_configs)
+        
+        status = TaskStatus.COMPLETED
+        
+    except Exception as e:
+        errors.append(str(e))
+        status = TaskStatus.FAILED
+        logger.exception(f"Task {task_id} failed with error: {e}")
+    
+    execution_time = time.time() - start_time
+    
+    # Return serializable result
+    result = TaskResult(
+        task_id=task_id,
+        status=status,
+        results=results,
+        errors=errors,
+        execution_time=execution_time,
+    )
+    return result.to_dict()
+
+
+class LocalExecutor(BaseExecutor):
+    """
+    Local executor using multiprocessing.
+    
+    Executes tasks locally using a ProcessPoolExecutor for
+    parallel execution of multiple tasks.
+    """
+    
+    def __init__(self, config: ExecutorConfig):
+        """
+        Initialize the local executor.
+        
+        Args:
+            config: Executor configuration
+        """
+        super().__init__(config)
+        self._pool: Optional[ProcessPoolExecutor] = None
+        self._available_gpus: List[int] = []
+        
+    def start(self) -> bool:
+        """
+        Start the executor.
+        
+        Verifies GPU availability and creates the process pool.
+        
+        Returns:
+            True if started successfully, False otherwise
+        """
+        if self._is_running:
+            logger.warning("Executor is already running")
+            return True
+        
+        # Verify GPU availability
+        if not self._check_gpu_availability():
+            logger.warning("No GPU detected, continuing anyway")
+        
+        # Create process pool
+        try:
+            self._pool = ProcessPoolExecutor(max_workers=self.config.max_workers)
+            self._is_running = True
+            logger.info(f"LocalExecutor started with {self.config.max_workers} workers")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to start executor: {e}")
+            return False
+    
+    def stop(self) -> None:
+        """Stop the executor and cleanup resources."""
+        if self._pool:
+            self._pool.shutdown(wait=True)
+            self._pool = None
+        self._is_running = False
+        self._pending_tasks.clear()
+        self._futures.clear()
+        logger.info("LocalExecutor stopped")
+    
+    def submit(self, task: Task) -> str:
+        """
+        Submit a task for asynchronous execution.
+        
+        Args:
+            task: Task to execute
+            
+        Returns:
+            Task ID
+        """
+        if not self._is_running:
+            raise RuntimeError("Executor is not running")
+        
+        task.status = TaskStatus.RUNNING
+        self._pending_tasks[task.task_id] = task
+        
+        # Submit to process pool
+        future = self._pool.submit(_execute_task_worker, task.to_dict())
+        self._futures[task.task_id] = future
+        
+        logger.info(f"Task {task.task_id} submitted")
+        return task.task_id
+    
+    def execute(self, task: Task) -> TaskResult:
+        """
+        Execute a task synchronously.
+        
+        Args:
+            task: Task to execute
+            
+        Returns:
+            TaskResult with execution results
+        """
+        start_time = time.time()
+        task.status = TaskStatus.RUNNING
+        
+        try:
+            # Execute directly in current process
+            result_dict = _execute_task_worker(task.to_dict())
+            
+            # Reconstruct TaskResult
+            result = TaskResult(
+                task_id=result_dict["task_id"],
+                status=TaskStatus(result_dict["status"]),
+                results=result_dict["results"],
+                errors=result_dict["errors"],
+                execution_time=result_dict["execution_time"],
+                metadata=result_dict.get("metadata", {}),
+            )
+            
+            task.status = result.status
+            return result
+            
+        except Exception as e:
+            task.status = TaskStatus.FAILED
+            return TaskResult(
+                task_id=task.task_id,
+                status=TaskStatus.FAILED,
+                errors=[str(e)],
+                execution_time=time.time() - start_time,
+            )
+    
+    def wait_for_task(self, task_id: str, timeout: Optional[float] = None) -> TaskResult:
+        """
+        Wait for a specific task to complete.
+        
+        Args:
+            task_id: Task ID to wait for
+            timeout: Maximum time to wait in seconds
+            
+        Returns:
+            TaskResult when task completes
+        """
+        if task_id not in self._futures:
+            raise ValueError(f"Task {task_id} not found")
+        
+        future = self._futures[task_id]
+        try:
+            result_dict = future.result(timeout=timeout)
+            result = TaskResult(
+                task_id=result_dict["task_id"],
+                status=TaskStatus(result_dict["status"]),
+                results=result_dict["results"],
+                errors=result_dict["errors"],
+                execution_time=result_dict["execution_time"],
+                metadata=result_dict.get("metadata", {}),
+            )
+            
+            # Update task status
+            if task_id in self._pending_tasks:
+                self._pending_tasks[task_id].status = result.status
+            
+            return result
+            
+        except Exception as e:
+            return TaskResult(
+                task_id=task_id,
+                status=TaskStatus.FAILED,
+                errors=[str(e)],
+            )
+    
+    def wait_all(self, timeout: Optional[float] = None) -> List[TaskResult]:
+        """
+        Wait for all submitted tasks to complete.
+        
+        Args:
+            timeout: Maximum time to wait in seconds
+            
+        Returns:
+            List of TaskResults
+        """
         results = []
-        for i, kernel_cfg in enumerate(kernel_configs):
-            logger.info(f"Processing kernel {i+1}/{len(kernel_configs)}: {kernel_cfg.kernel_id}")
-            state = self.evaluate(kernel_cfg)
-            results.append(state)
-            
-        # Save results
-        self._save_results(results)
-        
+        for task_id in list(self._futures.keys()):
+            result = self.wait_for_task(task_id, timeout)
+            results.append(result)
         return results
+    
+    def _check_gpu_availability(self) -> bool:
+        """Check GPU availability."""
+        try:
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name,index", "--format=csv,noheader"],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.returncode == 0:
+                gpus = result.stdout.strip().split("\n")
+                self._available_gpus = list(range(len(gpus)))
+                logger.info(f"Found {len(gpus)} GPU(s)")
+                return True
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+        
+        self._available_gpus = []
+        return False
 
-    def _save_results(self, results: List[EvaluationState]) -> None:
-        """Save evaluation results to file."""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        if self.config.output_format == "json":
-            output_file = self.config.output_dir / f"results_{timestamp}.json"
-            output_data = {
-                "mode": self.config.mode.name,
-                "timestamp": timestamp,
-                "results": [r.to_dict() for r in results],
-                "summary": self._generate_summary(results)
-            }
-            with open(output_file, "w") as f:
-                json.dump(output_data, f, indent=2)
-            logger.info(f"Results saved to {output_file}")
-            
-        elif self.config.output_format == "csv":
-            self._save_csv_results(results, timestamp)
-            
-        elif self.config.output_format == "markdown":
-            self._save_markdown_results(results, timestamp)
 
-    def _save_csv_results(
-        self, 
-        results: List[EvaluationState], 
-        timestamp: str
-    ) -> None:
-        """Save results in CSV format."""
-        import csv
+class ContainerExecutor(BaseExecutor):
+    """
+    Container executor using Docker.
+    
+    Executes tasks inside Docker containers for isolation
+    and reproducibility.
+    """
+    
+    def __init__(self, config: ExecutorConfig):
+        """
+        Initialize the container executor.
         
-        output_file = self.config.output_dir / f"results_{timestamp}.csv"
+        Args:
+            config: Executor configuration (must include docker_image)
+        """
+        super().__init__(config)
+        if not config.docker_image:
+            raise ValueError("docker_image is required for ContainerExecutor")
+        self._container_ids: Dict[str, str] = {}
         
-        fieldnames = [
-            "kernel_id", "kernel_type", "compiling", "correctness", 
-            "performance", "score", "errors"
-        ]
+    def start(self) -> bool:
+        """
+        Start the executor.
         
-        with open(output_file, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            for result in results:
-                writer.writerow({
-                    "kernel_id": result.extra.get("kernel_id", "unknown"),
-                    "kernel_type": result.extra.get("kernel_type", "unknown"),
-                    "compiling": result.compiling_state.name,
-                    "correctness": result.correctness_state.name,
-                    "performance": result.performance_state.name,
-                    "score": result.score,
-                    "errors": "; ".join(result.errors) if result.errors else ""
-                })
+        Verifies Docker availability and pulls the image.
         
-        logger.info(f"Results saved to {output_file}")
-
-    def _save_markdown_results(
-        self, 
-        results: List[EvaluationState], 
-        timestamp: str
-    ) -> None:
-        """Save results in Markdown format."""
-        output_file = self.config.output_dir / f"results_{timestamp}.md"
+        Returns:
+            True if started successfully, False otherwise
+        """
+        if self._is_running:
+            logger.warning("Executor is already running")
+            return True
         
-        with open(output_file, "w") as f:
-            f.write("# Evaluation Results\n\n")
-            f.write(f"**Mode:** {self.config.mode.name}\n")
-            f.write(f"**Timestamp:** {timestamp}\n\n")
-            
-            f.write("## Summary\n\n")
-            summary = self._generate_summary(results)
-            f.write(f"- Total Kernels: {summary['total']}\n")
-            f.write(f"- Passed: {summary['passed']}\n")
-            f.write(f"- Failed: {summary['failed']}\n")
-            f.write(f"- Pass Rate: {summary['pass_rate']:.1%}\n\n")
-            
-            f.write("## Detailed Results\n\n")
-            f.write("| # | Kernel | Compiling | Correctness | Performance | Score |\n")
-            f.write("|---|--------|-----------|-------------|-------------|-------|\n")
-            for i, result in enumerate(results):
-                kernel_id = result.extra.get("kernel_id", "unknown")
-                f.write(
-                    f"| {i+1} | {kernel_id} | {result.compiling_state.name} | "
-                    f"{result.correctness_state.name} | "
-                    f"{result.performance_state.name} | "
-                    f"{result.score:.2f} |\n"
+        # Check Docker availability
+        if not self._check_docker_availability():
+            logger.error("Docker is not available")
+            return False
+        
+        # Pull the image
+        if not self._pull_image():
+            logger.error(f"Failed to pull image: {self.config.docker_image}")
+            return False
+        
+        self._is_running = True
+        logger.info(f"ContainerExecutor started with image: {self.config.docker_image}")
+        return True
+    
+    def stop(self) -> None:
+        """Stop the executor and cleanup containers."""
+        # Stop all running containers
+        for task_id, container_id in self._container_ids.items():
+            try:
+                subprocess.run(
+                    ["docker", "stop", container_id],
+                    capture_output=True,
+                    timeout=30
                 )
+                subprocess.run(
+                    ["docker", "rm", container_id],
+                    capture_output=True,
+                    timeout=30
+                )
+            except Exception as e:
+                logger.warning(f"Failed to stop container {container_id}: {e}")
         
-        logger.info(f"Results saved to {output_file}")
-
-    def _generate_summary(self, results: List[EvaluationState]) -> Dict[str, Any]:
-        """Generate summary statistics from results."""
-        total = len(results)
-        passed = sum(
-            1 for r in results 
-            if r.compiling_state == BaseKind.SUCCESS 
-            and r.correctness_state == BaseKind.SUCCESS
-        )
-        failed = total - passed
+        self._container_ids.clear()
+        self._pending_tasks.clear()
+        self._is_running = False
+        logger.info("ContainerExecutor stopped")
+    
+    def submit(self, task: Task) -> str:
+        """
+        Submit a task for execution in a container.
         
-        return {
-            "total": total,
-            "passed": passed,
-            "failed": failed,
-            "pass_rate": passed / total if total > 0 else 0.0
-        }
+        Args:
+            task: Task to execute
+            
+        Returns:
+            Task ID
+        """
+        if not self._is_running:
+            raise RuntimeError("Executor is not running")
+        
+        task.status = TaskStatus.RUNNING
+        self._pending_tasks[task.task_id] = task
+        
+        # Start container in background
+        # Note: This is a simplified implementation
+        # A real implementation would use docker-py or similar
+        logger.info(f"Task {task.task_id} submitted to container")
+        return task.task_id
+    
+    def execute(self, task: Task) -> TaskResult:
+        """
+        Execute a task synchronously in a container.
+        
+        Args:
+            task: Task to execute
+            
+        Returns:
+            TaskResult with execution results
+        """
+        start_time = time.time()
+        task.status = TaskStatus.RUNNING
+        errors = []
+        
+        try:
+            # Build docker run command
+            gpu_args = self._build_gpu_args()
+            container_name = f"magpie-{task.task_id}"
+            
+            # For now, execute locally but in container
+            # This is a simplified implementation
+            # A full implementation would:
+            # 1. Mount necessary files into container
+            # 2. Run the evaluation inside container
+            # 3. Collect results
+            
+            cmd = [
+                "docker", "run",
+                "--rm",
+                "--name", container_name,
+                *gpu_args,
+                self.config.docker_image,
+                "python", "-c", f"print('Task {task.task_id} executed')"
+            ]
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=self.config.timeout_seconds
+            )
+            
+            if result.returncode != 0:
+                errors.append(f"Container execution failed: {result.stderr}")
+                status = TaskStatus.FAILED
+            else:
+                status = TaskStatus.COMPLETED
+                
+            # Note: In a real implementation, we would parse the actual
+            # evaluation results from the container output
+            
+            task.status = status
+            return TaskResult(
+                task_id=task.task_id,
+                status=status,
+                results=None,  # Would contain actual results
+                errors=errors,
+                execution_time=time.time() - start_time,
+            )
+            
+        except subprocess.TimeoutExpired:
+            task.status = TaskStatus.FAILED
+            return TaskResult(
+                task_id=task.task_id,
+                status=TaskStatus.FAILED,
+                errors=["Container execution timed out"],
+                execution_time=time.time() - start_time,
+            )
+        except Exception as e:
+            task.status = TaskStatus.FAILED
+            return TaskResult(
+                task_id=task.task_id,
+                status=TaskStatus.FAILED,
+                errors=[str(e)],
+                execution_time=time.time() - start_time,
+            )
+    
+    def _check_docker_availability(self) -> bool:
+        """Check if Docker is available."""
+        try:
+            result = subprocess.run(
+                ["docker", "version"],
+                capture_output=True,
+                timeout=10
+            )
+            return result.returncode == 0
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return False
+    
+    def _pull_image(self) -> bool:
+        """Pull the Docker image."""
+        try:
+            result = subprocess.run(
+                ["docker", "pull", self.config.docker_image],
+                capture_output=True,
+                timeout=300
+            )
+            return result.returncode == 0
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            return False
+    
+    def _build_gpu_args(self) -> List[str]:
+        """Build GPU arguments for docker run."""
+        if not self.config.gpu_devices:
+            return []
+        
+        # Use NVIDIA Container Toolkit
+        gpu_ids = ",".join(str(g) for g in self.config.gpu_devices)
+        return ["--gpus", f'"device={gpu_ids}"']
 
-    def cleanup(self) -> None:
-        """Clean up executor resources."""
-        self.scheduler.cleanup()
-        logger.info("Executor cleanup completed")
 
+def create_executor(config: ExecutorConfig) -> BaseExecutor:
+    """
+    Factory function to create an executor.
+    
+    Args:
+        config: Executor configuration
+        
+    Returns:
+        Appropriate executor instance
+    """
+    if config.executor_type == ExecutorType.LOCAL:
+        return LocalExecutor(config)
+    elif config.executor_type == ExecutorType.CONTAINER:
+        return ContainerExecutor(config)
+    else:
+        raise ValueError(f"Unknown executor type: {config.executor_type}")

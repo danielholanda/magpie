@@ -25,10 +25,9 @@ from typing import Any, Dict, List, Optional, Union
 import yaml
 
 from .config import KernelType, KernelEvalConfig
+from .core import Scheduler, SchedulerConfig, EnvironmentType
+from .core.task import ModeType, TaskResult, TaskStatus
 from .eval import EvaluationState, BaseKind
-from .modes import AnalyzeMode, CompareMode
-from .modes.analyze_eval.analyzer import AnalyzeConfig
-from .modes.compare_eval.comparator import CompareConfig
 from .utils import detect_gpu, get_gpu_info
 
 logger = logging.getLogger(__name__)
@@ -205,6 +204,40 @@ def _get_performance_config(config: Dict[str, Any], kernel_type: KernelType) -> 
     }
 
 
+def _get_scheduler_config(config: Dict[str, Any], args) -> SchedulerConfig:
+    """
+    Get scheduler configuration from framework config and CLI args.
+    
+    Args:
+        config: Framework config dict
+        args: CLI arguments
+        
+    Returns:
+        SchedulerConfig
+    """
+    sched_cfg = config.get("scheduler", {})
+    
+    # Determine environment type
+    env_type_str = getattr(args, "environment", None) or sched_cfg.get("environment", "local")
+    env_type = EnvironmentType(env_type_str.lower())
+    
+    # Get worker count
+    max_workers = getattr(args, "workers", None) or sched_cfg.get("max_workers", 1)
+    
+    # Get GPU devices
+    gpu_devices = sched_cfg.get("gpu_devices", [0])
+    
+    # Get docker image
+    docker_image = getattr(args, "docker_image", None) or sched_cfg.get("docker_image")
+    
+    return SchedulerConfig(
+        environment_type=env_type,
+        max_workers=max_workers,
+        gpu_devices=gpu_devices,
+        docker_image=docker_image,
+    )
+
+
 def run_analyze(args, config: Dict[str, Any]) -> int:
     """Run analyze mode."""
     # Load kernel configs
@@ -246,31 +279,53 @@ def run_analyze(args, config: Dict[str, Any]) -> int:
     kernel_type = kernel_configs[0].kernel_type if kernel_configs else KernelType.HIP
     
     # Get performance config from framework config
-    # Priority: args > kernel config > framework config
     perf_settings = _get_performance_config(config, kernel_type)
     
-    # Create analyzer with merged configuration
-    analyze_config = AnalyzeConfig(
-        kernel_type=kernel_type,
-        check_performance=not args.no_perf,  # args override
-        timeout_seconds=perf_settings["timeout_seconds"],
-        profiler_args=perf_settings["profiler_args"],
-    )
-    analyzer = AnalyzeMode(analyze_config)
+    # Create scheduler
+    scheduler_config = _get_scheduler_config(config, args)
+    scheduler = Scheduler(scheduler_config)
     
-    # Run analysis
-    results = []
-    for kernel_cfg in kernel_configs:
-        result = analyzer.analyze(kernel_cfg)
-        results.append((kernel_cfg, result))
-        _print_result(kernel_cfg, result)
+    if not scheduler.initialize():
+        logger.error("Failed to initialize scheduler")
+        return 1
     
-    # Save results
-    if results:
-        _save_results([r for _, r in results], args.output_dir, "analyze")
-    
-    failed = sum(1 for _, r in results if r.correctness_state != BaseKind.SUCCESS)
-    return 1 if failed > 0 else 0
+    try:
+        # Run analysis via scheduler
+        result = scheduler.run_analyze(
+            kernel_configs=kernel_configs,
+            check_performance=not args.no_perf,
+            timeout_seconds=perf_settings["timeout_seconds"],
+            profiler_args=perf_settings["profiler_args"],
+        )
+        
+        # Print and save results
+        if result.success and result.results:
+            for kernel_cfg, state in zip(kernel_configs, result.results):
+                # Reconstruct EvaluationState if needed
+                if isinstance(state, dict):
+                    state = _dict_to_eval_state(state)
+                _print_result(kernel_cfg, state)
+            
+            _save_results(result.results, args.output_dir, "analyze")
+        else:
+            logger.error(f"Analysis failed: {result.errors}")
+            return 1
+        
+        # Count failures
+        failed = 0
+        for state in result.results:
+            if isinstance(state, dict):
+                correctness = state.get("correctness_state", "UNKNOWN")
+                if correctness != "SUCCESS":
+                    failed += 1
+            elif hasattr(state, 'correctness_state'):
+                if state.correctness_state != BaseKind.SUCCESS:
+                    failed += 1
+        
+        return 1 if failed > 0 else 0
+        
+    finally:
+        scheduler.shutdown()
 
 
 def run_compare(args, config: Dict[str, Any]) -> int:
@@ -304,32 +359,71 @@ def run_compare(args, config: Dict[str, Any]) -> int:
     kernel_type = kernel_configs[0].kernel_type if kernel_configs else KernelType.HIP
     
     # Get performance config from framework config
-    # Priority: args > kernel config > framework config
     perf_settings = _get_performance_config(config, kernel_type)
     
-    # Create comparator with merged configuration
-    compare_config = CompareConfig(
-        baseline_index=args.baseline,
-        check_performance=not args.no_perf,  # args override
-        timeout_seconds=perf_settings["timeout_seconds"],
-        profiler_args=perf_settings["profiler_args"],
-    )
-    comparator = CompareMode(compare_config)
+    # Create scheduler
+    scheduler_config = _get_scheduler_config(config, args)
+    scheduler = Scheduler(scheduler_config)
     
-    # Run comparison
-    comparison = comparator.compare(kernel_configs)
+    if not scheduler.initialize():
+        logger.error("Failed to initialize scheduler")
+        return 1
     
-    # Print results
-    print(f"\n{'='*60}")
-    print("COMPARISON RESULTS")
-    print(f"{'='*60}")
-    print(comparison.summary)
-    print(f"{'='*60}\n")
+    try:
+        # Run comparison via scheduler
+        result = scheduler.run_compare(
+            kernel_configs=kernel_configs,
+            baseline_index=args.baseline,
+            check_performance=not args.no_perf,
+            timeout_seconds=perf_settings["timeout_seconds"],
+            profiler_args=perf_settings["profiler_args"],
+        )
+        
+        # Print results
+        if result.success and result.results:
+            comparison = result.results
+            
+            print(f"\n{'='*60}")
+            print("COMPARISON RESULTS")
+            print(f"{'='*60}")
+            
+            if isinstance(comparison, dict):
+                print(comparison.get("summary", "No summary available"))
+            elif hasattr(comparison, 'summary'):
+                print(comparison.summary)
+            
+            print(f"{'='*60}\n")
+            
+            # Save results
+            _save_comparison(comparison, args.output_dir)
+        else:
+            logger.error(f"Comparison failed: {result.errors}")
+            return 1
+        
+        return 0
+        
+    finally:
+        scheduler.shutdown()
+
+
+def _dict_to_eval_state(state_dict: Dict[str, Any]) -> EvaluationState:
+    """Convert a dictionary back to EvaluationState."""
+    state = EvaluationState()
     
-    # Save results
-    _save_comparison(comparison, args.output_dir)
+    if "compiling_state" in state_dict:
+        state.compiling_state = BaseKind[state_dict["compiling_state"]]
+    if "correctness_state" in state_dict:
+        state.correctness_state = BaseKind[state_dict["correctness_state"]]
+    if "performance_state" in state_dict:
+        state.performance_state = BaseKind[state_dict["performance_state"]]
+    if "score" in state_dict:
+        state.score = state_dict["score"]
+    if "errors" in state_dict:
+        state.errors = state_dict["errors"]
+    if "extra" in state_dict:
+        state.extra = state_dict["extra"]
     
-    return 0
+    return state
 
 
 def _print_result(kernel_cfg: KernelEvalConfig, result: EvaluationState) -> None:
@@ -337,18 +431,28 @@ def _print_result(kernel_cfg: KernelEvalConfig, result: EvaluationState) -> None
     print(f"\n{'='*60}")
     print(f"Kernel: {kernel_cfg.kernel_id}")
     print(f"Type: {kernel_cfg.kernel_type.name}")
-    print(f"Compiling: {result.compiling_state.name}")
-    print(f"Correctness: {result.correctness_state.name}")
-    print(f"Performance: {result.performance_state.name}")
-    print(f"Score: {result.score:.2f}")
-    if result.errors:
+    
+    if isinstance(result, dict):
+        print(f"Compiling: {result.get('compiling_state', 'UNKNOWN')}")
+        print(f"Correctness: {result.get('correctness_state', 'UNKNOWN')}")
+        print(f"Performance: {result.get('performance_state', 'UNKNOWN')}")
+        print(f"Score: {result.get('score', 0.0):.2f}")
+        errors = result.get('errors', [])
+    else:
+        print(f"Compiling: {result.compiling_state.name}")
+        print(f"Correctness: {result.correctness_state.name}")
+        print(f"Performance: {result.performance_state.name}")
+        print(f"Score: {result.score:.2f}")
+        errors = result.errors
+    
+    if errors:
         print("Errors:")
-        for err in result.errors:
+        for err in errors:
             print(f"  - {err}")
     print(f"{'='*60}")
 
 
-def _save_results(results: List[EvaluationState], output_dir: Path, mode: str) -> None:
+def _save_results(results: List, output_dir: Path, mode: str) -> None:
     """Save results to file."""
     import json
     from datetime import datetime
@@ -357,11 +461,20 @@ def _save_results(results: List[EvaluationState], output_dir: Path, mode: str) -
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_file = output_dir / f"{mode}_results_{timestamp}.json"
     
+    serialized_results = []
+    for r in results:
+        if isinstance(r, dict):
+            serialized_results.append(r)
+        elif hasattr(r, 'to_dict'):
+            serialized_results.append(r.to_dict())
+        else:
+            serialized_results.append(str(r))
+    
     with open(output_file, "w") as f:
         json.dump({
             "mode": mode,
             "timestamp": timestamp,
-            "results": [r.to_dict() for r in results]
+            "results": serialized_results
         }, f, indent=2)
     
     logger.info(f"Results saved to {output_file}")
@@ -376,8 +489,15 @@ def _save_comparison(comparison: Any, output_dir: Path) -> None:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_file = output_dir / f"comparison_{timestamp}.json"
     
+    if isinstance(comparison, dict):
+        data = comparison
+    elif hasattr(comparison, 'to_dict'):
+        data = comparison.to_dict()
+    else:
+        data = {"result": str(comparison)}
+    
     with open(output_file, "w") as f:
-        json.dump(comparison.to_dict(), f, indent=2)
+        json.dump(data, f, indent=2)
     
     logger.info(f"Comparison saved to {output_file}")
 
@@ -405,6 +525,22 @@ def create_parser() -> argparse.ArgumentParser:
         "--gpu-info",
         action="store_true",
         help="Show detected GPU info and exit"
+    )
+    parser.add_argument(
+        "--environment", "-e",
+        type=str,
+        choices=["local", "container"],
+        help="Execution environment (default: local)"
+    )
+    parser.add_argument(
+        "--workers", "-w",
+        type=int,
+        help="Number of concurrent workers"
+    )
+    parser.add_argument(
+        "--docker-image",
+        type=str,
+        help="Docker image for container environment"
     )
     
     subparsers = parser.add_subparsers(dest="mode", help="Evaluation mode")

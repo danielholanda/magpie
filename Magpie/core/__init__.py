@@ -1,18 +1,51 @@
 """
 Core evaluation engine components.
 
-This module contains:
-- Executor: Unified execution engine for evaluations
-- Scheduler: Workload scheduling and environment preparation
+This module provides:
+- Scheduler: Task scheduling and executor management
+- Executor: Task execution (Local, Container, future: Distributed)
+- Task: Task and result definitions
 """
 
-from .scheduler import Scheduler, WorkloadConfig
-from .executor import Executor, ExecutorConfig
+from .task import (
+    Task,
+    TaskResult,
+    TaskStatus,
+    ModeType,
+    ModeConfig,
+)
+from .executor import (
+    BaseExecutor,
+    LocalExecutor,
+    ContainerExecutor,
+    ExecutorConfig,
+    ExecutorType,
+    create_executor,
+)
+from .scheduler import (
+    Scheduler,
+    SchedulerConfig,
+    EnvironmentType,
+    WorkloadConfig,  # Backwards compatibility alias
+)
 
 __all__ = [
-    "Scheduler",
-    "WorkloadConfig",
-    "Executor",
+    # Task definitions
+    "Task",
+    "TaskResult",
+    "TaskStatus",
+    "ModeType",
+    "ModeConfig",
+    # Executor classes
+    "BaseExecutor",
+    "LocalExecutor",
+    "ContainerExecutor",
     "ExecutorConfig",
+    "ExecutorType",
+    "create_executor",
+    # Scheduler classes
+    "Scheduler",
+    "SchedulerConfig",
+    "EnvironmentType",
+    "WorkloadConfig",  # Backwards compatibility
 ]
-

@@ -81,6 +81,7 @@ def analyze(
     working_dir: str = "",
     compile_command: str = "",
     check_performance: bool = True,
+    environment: str = "local",
 ) -> str:
     """
     Analyze a GPU kernel for correctness and performance.
@@ -92,13 +93,13 @@ def analyze(
         working_dir: Working directory (default: kernel's parent dir)
         compile_command: Custom compile command (optional)
         check_performance: Run performance profiling (default: True)
+        environment: Execution environment "local" or "container"
     
     Returns:
         JSON with: compiling_state, correctness_state, performance_state, score, errors
     """
     from ..config import KernelType, KernelEvalConfig
-    from ..modes import AnalyzeMode
-    from ..modes.analyze_eval.analyzer import AnalyzeConfig
+    from ..core import Scheduler, SchedulerConfig, EnvironmentType
     
     try:
         # Parse kernel type
@@ -120,22 +121,53 @@ def analyze(
             working_dir=working_dir or str(kernel_file.parent),
         )
         
-        analyzer = AnalyzeMode(AnalyzeConfig(
-            kernel_type=ktype,
-            check_performance=check_performance,
-        ))
+        # Create scheduler
+        env_type = EnvironmentType(environment.lower())
+        scheduler_config = SchedulerConfig(environment_type=env_type)
+        scheduler = Scheduler(scheduler_config)
         
-        result = analyzer.analyze(kernel_config)
+        if not scheduler.initialize():
+            return json.dumps({"error": "Failed to initialize scheduler"})
         
-        return json.dumps({
-            "kernel_id": kernel_config.kernel_id,
-            "kernel_type": ktype.name,
-            "compiling_state": result.compiling_state.name,
-            "correctness_state": result.correctness_state.name,
-            "performance_state": result.performance_state.name,
-            "score": result.score,
-            "errors": result.errors or [],
-        }, indent=2)
+        try:
+            # Run analysis via scheduler
+            task_result = scheduler.run_analyze(
+                kernel_configs=[kernel_config],
+                check_performance=check_performance,
+            )
+            
+            if task_result.success and task_result.results:
+                result = task_result.results[0]
+                
+                # Handle both dict and object results
+                if isinstance(result, dict):
+                    return json.dumps({
+                        "kernel_id": kernel_config.kernel_id,
+                        "kernel_type": ktype.name,
+                        "compiling_state": result.get("compiling_state", "UNKNOWN"),
+                        "correctness_state": result.get("correctness_state", "UNKNOWN"),
+                        "performance_state": result.get("performance_state", "UNKNOWN"),
+                        "score": result.get("score", 0.0),
+                        "errors": result.get("errors", []),
+                    }, indent=2)
+                else:
+                    return json.dumps({
+                        "kernel_id": kernel_config.kernel_id,
+                        "kernel_type": ktype.name,
+                        "compiling_state": result.compiling_state.name,
+                        "correctness_state": result.correctness_state.name,
+                        "performance_state": result.performance_state.name,
+                        "score": result.score,
+                        "errors": result.errors or [],
+                    }, indent=2)
+            else:
+                return json.dumps({
+                    "error": "Analysis failed",
+                    "errors": task_result.errors,
+                })
+        finally:
+            scheduler.shutdown()
+            
     except Exception as e:
         return json.dumps({"error": str(e), "kernel_path": kernel_path})
 
@@ -150,6 +182,7 @@ def compare(
     testcase_command: str = "",
     baseline_index: int = 0,
     check_performance: bool = True,
+    environment: str = "local",
 ) -> str:
     """
     Compare multiple GPU kernels for performance and correctness.
@@ -160,13 +193,13 @@ def compare(
         testcase_command: Command to run the test case (optional)
         baseline_index: Index of baseline kernel for comparison (default: 0)
         check_performance: Run performance profiling (default: True)
+        environment: Execution environment "local" or "container"
     
     Returns:
         JSON with comparison results, ranking, and summary
     """
     from ..config import KernelType, KernelEvalConfig
-    from ..modes import CompareMode
-    from ..modes.compare_eval.comparator import CompareConfig
+    from ..core import Scheduler, SchedulerConfig, EnvironmentType
     
     try:
         if len(kernel_paths) < 2:
@@ -190,13 +223,38 @@ def compare(
                 working_dir=str(kernel_file.parent),
             ))
         
-        comparator = CompareMode(CompareConfig(
-            baseline_index=baseline_index,
-            check_performance=check_performance,
-        ))
+        # Create scheduler
+        env_type = EnvironmentType(environment.lower())
+        scheduler_config = SchedulerConfig(environment_type=env_type)
+        scheduler = Scheduler(scheduler_config)
         
-        comparison = comparator.compare(kernel_configs)
-        return json.dumps(comparison.to_dict(), indent=2)
+        if not scheduler.initialize():
+            return json.dumps({"error": "Failed to initialize scheduler"})
+        
+        try:
+            # Run comparison via scheduler
+            task_result = scheduler.run_compare(
+                kernel_configs=kernel_configs,
+                baseline_index=baseline_index,
+                check_performance=check_performance,
+            )
+            
+            if task_result.success and task_result.results:
+                comparison = task_result.results
+                if isinstance(comparison, dict):
+                    return json.dumps(comparison, indent=2)
+                elif hasattr(comparison, 'to_dict'):
+                    return json.dumps(comparison.to_dict(), indent=2)
+                else:
+                    return json.dumps({"result": str(comparison)}, indent=2)
+            else:
+                return json.dumps({
+                    "error": "Comparison failed",
+                    "errors": task_result.errors,
+                })
+        finally:
+            scheduler.shutdown()
+            
     except Exception as e:
         return json.dumps({"error": str(e), "kernel_paths": kernel_paths})
 

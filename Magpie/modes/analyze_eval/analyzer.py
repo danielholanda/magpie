@@ -40,7 +40,7 @@ class AnalyzeConfig:
         profiler_args: Additional arguments for the profiler
     """
     kernel_type: KernelType = KernelType.HIP
-    gpu_arch: str = "gfx90a"
+    gpu_arch: str = "gfx942"
     check_performance: bool = True
     timeout_seconds: float = 60.0
     profiler_args: List[str] = None
