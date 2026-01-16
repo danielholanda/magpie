@@ -26,6 +26,19 @@ class EvalMode(Enum):
 
 
 @dataclass
+class CompilingConfig:
+    """
+    Configuration for kernel compilation.
+    
+    Attributes:
+        enable_default_compile: If True, attempt default compilation (hipcc/nvcc)
+                               when no compile_command is provided.
+                               If False (default), skip compilation for pre-compiled kernels.
+    """
+    enable_default_compile: bool = False
+
+
+@dataclass
 class PipelineConfig:
     """
     Main pipeline configuration (framework config).
@@ -34,6 +47,7 @@ class PipelineConfig:
         mode: Evaluation mode (analyze or compare)
         kernel_type: Type of kernel (pytorch, hip, cuda)
         gpu_arch: Target GPU architecture (auto-detected if None)
+        compiling_config: Configuration for compilation
         correctness_config: Configuration for correctness evaluation
         performance_config: Configuration for performance evaluation
         output_dir: Directory for output files
@@ -42,12 +56,15 @@ class PipelineConfig:
     mode: EvalMode = EvalMode.ANALYZE
     kernel_type: KernelType = KernelType.HIP
     gpu_arch: Optional[str] = None  # Auto-detect if None
+    compiling_config: Optional[CompilingConfig] = None
     correctness_config: Optional[CorrectnessConfig] = None
     performance_config: Optional[PerformanceConfig] = None
     output_dir: str = "./results"
     verbose: bool = False
 
     def __post_init__(self):
+        if self.compiling_config is None:
+            self.compiling_config = CompilingConfig()
         if self.correctness_config is None:
             self.correctness_config = CorrectnessConfig()
         if self.performance_config is None:

@@ -135,10 +135,13 @@ class Scheduler:
         self,
         kernel_configs: List[KernelEvalConfig],
         mode_type: ModeType = ModeType.ANALYZE,
+        enable_default_compile: bool = False,
         check_performance: bool = True,
         gpu_arch: str = "gfx942",
-        timeout_seconds: float = 60.0,
+        timeout_seconds: float = 300.0,
         profiler_args: Optional[List[str]] = None,
+        rocprof_config: Optional[Dict[str, Any]] = None,
+        ncu_config: Optional[Dict[str, Any]] = None,
         baseline_index: int = 0,
         priority: int = 0,
         metadata: Optional[Dict[str, Any]] = None,
@@ -149,10 +152,13 @@ class Scheduler:
         Args:
             kernel_configs: Kernel configurations to evaluate
             mode_type: Type of evaluation mode
+            enable_default_compile: Enable default compilation when no compile_command
             check_performance: Whether to run performance profiling
             gpu_arch: GPU architecture
             timeout_seconds: Timeout for profiling operations
-            profiler_args: Additional arguments for the profiler
+            profiler_args: Additional arguments for the profiler (legacy)
+            rocprof_config: rocprof-compute configuration dict
+            ncu_config: ncu configuration dict
             baseline_index: Baseline kernel index for compare mode
             priority: Task priority
             metadata: Additional metadata
@@ -162,10 +168,13 @@ class Scheduler:
         """
         mode_config = ModeConfig(
             mode_type=mode_type,
+            enable_default_compile=enable_default_compile,
             check_performance=check_performance,
             gpu_arch=gpu_arch,
             timeout_seconds=timeout_seconds,
             profiler_args=profiler_args or [],
+            rocprof_config=rocprof_config or {},
+            ncu_config=ncu_config or {},
             baseline_index=baseline_index,
         )
         
@@ -240,20 +249,26 @@ class Scheduler:
     def run_analyze(
         self,
         kernel_configs: List[KernelEvalConfig],
+        enable_default_compile: bool = False,
         check_performance: bool = True,
         gpu_arch: str = "gfx942",
-        timeout_seconds: float = 60.0,
+        timeout_seconds: float = 300.0,
         profiler_args: Optional[List[str]] = None,
+        rocprof_config: Optional[Dict[str, Any]] = None,
+        ncu_config: Optional[Dict[str, Any]] = None,
     ) -> TaskResult:
         """
         Convenience method to run analyze mode.
         
         Args:
             kernel_configs: Kernel configurations to analyze
+            enable_default_compile: Enable default compilation when no compile_command
             check_performance: Whether to run performance profiling
             gpu_arch: GPU architecture
             timeout_seconds: Timeout for profiling operations
-            profiler_args: Additional arguments for the profiler
+            profiler_args: Additional arguments for the profiler (legacy)
+            rocprof_config: rocprof-compute configuration dict
+            ncu_config: ncu configuration dict
             
         Returns:
             TaskResult with analysis results
@@ -261,10 +276,13 @@ class Scheduler:
         task = self.create_task(
             kernel_configs=kernel_configs,
             mode_type=ModeType.ANALYZE,
+            enable_default_compile=enable_default_compile,
             check_performance=check_performance,
             gpu_arch=gpu_arch,
             timeout_seconds=timeout_seconds,
             profiler_args=profiler_args,
+            rocprof_config=rocprof_config,
+            ncu_config=ncu_config,
         )
         return self.execute(task)
     
@@ -272,10 +290,13 @@ class Scheduler:
         self,
         kernel_configs: List[KernelEvalConfig],
         baseline_index: int = 0,
+        enable_default_compile: bool = False,
         check_performance: bool = True,
         gpu_arch: str = "gfx942",
-        timeout_seconds: float = 60.0,
+        timeout_seconds: float = 300.0,
         profiler_args: Optional[List[str]] = None,
+        rocprof_config: Optional[Dict[str, Any]] = None,
+        ncu_config: Optional[Dict[str, Any]] = None,
     ) -> TaskResult:
         """
         Convenience method to run compare mode.
@@ -283,10 +304,13 @@ class Scheduler:
         Args:
             kernel_configs: Kernel configurations to compare
             baseline_index: Index of baseline kernel
+            enable_default_compile: Enable default compilation when no compile_command
             check_performance: Whether to run performance profiling
             gpu_arch: GPU architecture
             timeout_seconds: Timeout for profiling operations
-            profiler_args: Additional arguments for the profiler
+            profiler_args: Additional arguments for the profiler (legacy)
+            rocprof_config: rocprof-compute configuration dict
+            ncu_config: ncu configuration dict
             
         Returns:
             TaskResult with comparison results
@@ -294,11 +318,14 @@ class Scheduler:
         task = self.create_task(
             kernel_configs=kernel_configs,
             mode_type=ModeType.COMPARE,
+            enable_default_compile=enable_default_compile,
             baseline_index=baseline_index,
             check_performance=check_performance,
             gpu_arch=gpu_arch,
             timeout_seconds=timeout_seconds,
             profiler_args=profiler_args,
+            rocprof_config=rocprof_config,
+            ncu_config=ncu_config,
         )
         return self.execute(task)
     

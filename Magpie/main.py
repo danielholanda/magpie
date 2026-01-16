@@ -173,6 +173,22 @@ def _parse_kernel_entry(entry: Dict[str, Any]) -> Optional[KernelEvalConfig]:
     )
 
 
+def _get_compiling_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Get compiling configuration from framework config.
+    
+    Args:
+        config: Framework config dict
+        
+    Returns:
+        Dict with enable_default_compile
+    """
+    compile_cfg = config.get("compiling", {})
+    return {
+        "enable_default_compile": compile_cfg.get("enable_default_compile", False),
+    }
+
+
 def _get_performance_config(config: Dict[str, Any], kernel_type: KernelType) -> Dict[str, Any]:
     """
     Get performance configuration from framework config.
@@ -182,25 +198,44 @@ def _get_performance_config(config: Dict[str, Any], kernel_type: KernelType) -> 
         kernel_type: Kernel type to determine which profiler args to use
         
     Returns:
-        Dict with timeout_seconds and profiler_args
+        Dict with timeout_seconds, profiler_args, and rocprof_config/ncu_config
     """
     perf_cfg = config.get("performance", {})
     
     # Get timeout
-    timeout = perf_cfg.get("timeout_seconds", 60.0)
+    timeout = perf_cfg.get("timeout_seconds", 300.0)
     
-    # Get profiler args based on kernel type
+    # Get profiler args and config based on kernel type
     profiler_args = []
+    rocprof_config = {}
+    ncu_config = {}
+    
     if kernel_type == KernelType.HIP:
         rocprof_cfg = perf_cfg.get("rocprof_compute", {})
-        profiler_args = rocprof_cfg.get("args", [])
+        profiler_args = rocprof_cfg.get("profile_args", rocprof_cfg.get("args", []))
+        
+        # Build full rocprof config
+        rocprof_config = {
+            "workload_dir": rocprof_cfg.get("workload_dir", "./workloads"),
+            "metric_blocks": rocprof_cfg.get("metric_blocks", ["1", "2", "5", "10", "11", "12", "14", "16", "17"]),
+            "no_roof": rocprof_cfg.get("no_roof", True),
+            "output_format": rocprof_cfg.get("output_format", "csv"),
+            "profile_args": rocprof_cfg.get("profile_args", []),
+            "analyze_args": rocprof_cfg.get("analyze_args", []),
+        }
     elif kernel_type == KernelType.CUDA:
         ncu_cfg = perf_cfg.get("ncu", {})
         profiler_args = ncu_cfg.get("args", [])
+        ncu_config = {
+            "args": ncu_cfg.get("args", []),
+            "metrics": ncu_cfg.get("metrics", []),
+        }
     
     return {
         "timeout_seconds": timeout,
         "profiler_args": profiler_args,
+        "rocprof_config": rocprof_config,
+        "ncu_config": ncu_config,
     }
 
 
@@ -278,7 +313,8 @@ def run_analyze(args, config: Dict[str, Any]) -> int:
     # Get kernel type for configuration
     kernel_type = kernel_configs[0].kernel_type if kernel_configs else KernelType.HIP
     
-    # Get performance config from framework config
+    # Get config from framework config
+    compile_settings = _get_compiling_config(config)
     perf_settings = _get_performance_config(config, kernel_type)
     
     # Create scheduler
@@ -293,9 +329,12 @@ def run_analyze(args, config: Dict[str, Any]) -> int:
         # Run analysis via scheduler
         result = scheduler.run_analyze(
             kernel_configs=kernel_configs,
+            enable_default_compile=compile_settings["enable_default_compile"],
             check_performance=not args.no_perf,
             timeout_seconds=perf_settings["timeout_seconds"],
             profiler_args=perf_settings["profiler_args"],
+            rocprof_config=perf_settings["rocprof_config"],
+            ncu_config=perf_settings["ncu_config"],
         )
         
         # Print and save results
@@ -358,7 +397,8 @@ def run_compare(args, config: Dict[str, Any]) -> int:
     # Get kernel type for configuration
     kernel_type = kernel_configs[0].kernel_type if kernel_configs else KernelType.HIP
     
-    # Get performance config from framework config
+    # Get config from framework config
+    compile_settings = _get_compiling_config(config)
     perf_settings = _get_performance_config(config, kernel_type)
     
     # Create scheduler
@@ -374,9 +414,12 @@ def run_compare(args, config: Dict[str, Any]) -> int:
         result = scheduler.run_compare(
             kernel_configs=kernel_configs,
             baseline_index=args.baseline,
+            enable_default_compile=compile_settings["enable_default_compile"],
             check_performance=not args.no_perf,
             timeout_seconds=perf_settings["timeout_seconds"],
             profiler_args=perf_settings["profiler_args"],
+            rocprof_config=perf_settings["rocprof_config"],
+            ncu_config=perf_settings["ncu_config"],
         )
         
         # Print results

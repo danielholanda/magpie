@@ -61,7 +61,7 @@ class Compiling:
         """
         self.pipeline_cfg = pipeline_cfg
 
-    def run(self, kernel_cfg: KernelEvalConfig) -> CompilingResult:
+    def run(self, kernel_cfg: KernelEvalConfig) -> Optional[CompilingResult]:
         """
         Compile the kernel code based on the provided configuration.
         
@@ -69,28 +69,32 @@ class Compiling:
             kernel_cfg: Configuration for the kernel evaluation
 
         Returns:
-            CompilingResult with success status and compiled output paths
+            CompilingResult with success status and compiled output paths,
+            or None if compilation should be skipped
         """
         try:
+            kernel_type = kernel_cfg.kernel_type
+            
+            # PyTorch kernels never need compilation
+            if kernel_type == KernelType.PYTORCH:
+                return None
+            
             # If custom compile command is provided, use it
             if kernel_cfg.has_compile_command():
                 return self._compile_with_command(kernel_cfg)
             
-            # Otherwise, compile based on kernel type
-            kernel_type = kernel_cfg.kernel_type
+            # No compile_command provided - check if default compile is enabled
+            compiling_config = self.pipeline_cfg.compiling_config
+            if compiling_config and compiling_config.enable_default_compile:
+                # Default compile enabled - compile based on kernel type
+                if kernel_type == KernelType.HIP:
+                    return self._compile_hip(kernel_cfg)
+                elif kernel_type == KernelType.CUDA:
+                    return self._compile_cuda(kernel_cfg)
             
-            if kernel_type == KernelType.HIP:
-                return self._compile_hip(kernel_cfg)
-            elif kernel_type == KernelType.CUDA:
-                return self._compile_cuda(kernel_cfg)
-            elif kernel_type == KernelType.PYTORCH:
-                # PyTorch kernels don't need compilation
-                return CompilingResult(success=True)
-            else:
-                return CompilingResult(
-                    success=False,
-                    errors=f"Unsupported kernel type: {kernel_type}"
-                )
+            # Default compile disabled or unsupported type - skip compilation
+            # (assume pre-compiled binary exists)
+            return None
 
         except Exception as e:
             return CompilingResult(success=False, errors=str(e))

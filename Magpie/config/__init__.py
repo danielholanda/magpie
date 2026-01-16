@@ -8,6 +8,7 @@ the evaluation framework.
 from .pipeline import (
     KernelType,
     EvalMode,
+    CompilingConfig,
     PipelineConfig,
 )
 from .kernel import (
@@ -21,12 +22,17 @@ from .correctness import (
 from .performance import (
     PerfBackend,
     PerformanceConfig,
+    RocprofComputeConfig,
+    NcuConfig,
+    ROCPROF_KEY_METRICS,
+    DEFAULT_ROCPROF_METRIC_BLOCKS,
 )
 
 __all__ = [
     # Pipeline configuration
     "KernelType",
     "EvalMode",
+    "CompilingConfig",
     "PipelineConfig",
     # Kernel evaluation configuration
     "KernelEvalConfig",
@@ -37,5 +43,9 @@ __all__ = [
     # Performance configuration
     "PerfBackend",
     "PerformanceConfig",
+    "RocprofComputeConfig",
+    "NcuConfig",
+    "ROCPROF_KEY_METRICS",
+    "DEFAULT_ROCPROF_METRIC_BLOCKS",
 ]
 

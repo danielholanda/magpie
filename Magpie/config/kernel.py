@@ -134,3 +134,49 @@ class KernelEvalConfig:
         # Single command - wrap in a list
         return [self.prof_command]
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "kernel_id": self.kernel_id,
+            "kernel_type": self.kernel_type.name if hasattr(self.kernel_type, 'name') else str(self.kernel_type),
+            "source_file_path": self.source_file_path,
+            "working_dir": self.working_dir,
+            "env": self.env,
+            "compiling_command": self.compiling_command,
+            "testcase_command": self.testcase_command,
+            "prof_command": self.prof_command,
+            "get_inputs_func": self.get_inputs_func,
+            "get_init_inputs_func": self.get_init_inputs_func,
+            "input_shapes": self.input_shapes,
+            "dtype": self.dtype,
+            "extra": self.extra,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "KernelEvalConfig":
+        """Create from dictionary."""
+        # Handle kernel_type conversion - use name (e.g., "HIP") not value
+        kernel_type = data.get("kernel_type", "HIP")
+        if isinstance(kernel_type, str):
+            # Try to get enum by name
+            kernel_type = KernelType[kernel_type.upper()]
+        elif isinstance(kernel_type, int):
+            # Fallback: get by value
+            kernel_type = KernelType(kernel_type)
+        
+        return cls(
+            kernel_id=data.get("kernel_id", ""),
+            kernel_type=kernel_type,
+            source_file_path=data.get("source_file_path", []),
+            working_dir=data.get("working_dir"),
+            env=data.get("env"),
+            compiling_command=data.get("compiling_command"),
+            testcase_command=data.get("testcase_command"),
+            prof_command=data.get("prof_command"),
+            get_inputs_func=data.get("get_inputs_func", "get_inputs"),
+            get_init_inputs_func=data.get("get_init_inputs_func", "get_init_inputs"),
+            input_shapes=data.get("input_shapes", []),
+            dtype=data.get("dtype", "float32"),
+            extra=data.get("extra", {}),
+        )
+

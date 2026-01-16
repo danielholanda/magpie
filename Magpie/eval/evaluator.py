@@ -21,6 +21,7 @@ class BaseKind(Enum):
     """Base status for evaluation stages."""
     SUCCESS = auto()
     FAILED = auto()
+    SKIPPED = auto()
 
 
 @dataclass
@@ -61,10 +62,7 @@ class EvaluationState:
                 "success": self.correctness_result.success if self.correctness_result else False,
                 "errors": self.correctness_result.errors if self.correctness_result else None,
             } if self.correctness_result else None,
-            "performance_result": {
-                "success": self.performance_result.success if self.performance_result else False,
-                "errors": self.performance_result.errors if self.performance_result else None,
-            } if self.performance_result else None,
+            "performance_result": self.performance_result.to_dict() if self.performance_result else None,
             "extra": self.extra,
         }
 
@@ -102,7 +100,7 @@ class Evaluator:
         state.extra["kernel_id"] = kernel_cfg.kernel_id
         state.extra["kernel_type"] = kernel_cfg.kernel_type.name
 
-        # 1) Compiling
+        # 1) Compiling (skip if no compile_command)
         state = self._compile(state, kernel_cfg)
         if state.compiling_state == BaseKind.FAILED:
             return state
@@ -112,7 +110,7 @@ class Evaluator:
         if state.correctness_state == BaseKind.FAILED:
             return state
 
-        # 3) Performance
+        # 3) Performance (skip if no prof_command and profiling disabled)
         state = self._check_performance(state, kernel_cfg)
 
         # 4) Calculate score
@@ -130,7 +128,10 @@ class Evaluator:
             result = self.compiling.run(kernel_cfg)
             state.compiling_result = result
             
-            if result.success:
+            if result is None:
+                # No compilation needed (skipped)
+                state.compiling_state = BaseKind.SKIPPED
+            elif result.success:
                 state.compiling_state = BaseKind.SUCCESS
             else:
                 state.compiling_state = BaseKind.FAILED
@@ -174,7 +175,10 @@ class Evaluator:
             result = self.performance.run(state, kernel_cfg)
             state.performance_result = result
             
-            if result.success:
+            if result is None:
+                # No profiling (skipped)
+                state.performance_state = BaseKind.SKIPPED
+            elif result.success:
                 state.performance_state = BaseKind.SUCCESS
             else:
                 state.performance_state = BaseKind.FAILED
@@ -190,7 +194,8 @@ class Evaluator:
         """Calculate overall evaluation score."""
         score = 0.0
         
-        if state.compiling_state != BaseKind.SUCCESS:
+        # If compiling failed (not skipped), score is 0
+        if state.compiling_state == BaseKind.FAILED:
             state.score = 0.0
             return state
         
@@ -198,9 +203,13 @@ class Evaluator:
         if state.correctness_state == BaseKind.SUCCESS:
             score += 0.5
         
-        # Performance contributes 50%
+        # Performance contributes 50% (if not skipped)
         if state.performance_state == BaseKind.SUCCESS:
             score += 0.5
+        elif state.performance_state == BaseKind.SKIPPED:
+            # If performance is skipped, correctness gets full weight
+            if state.correctness_state == BaseKind.SUCCESS:
+                score = 1.0
         
         state.score = score
         return state

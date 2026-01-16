@@ -34,17 +34,23 @@ class ModeConfig:
     
     Attributes:
         mode_type: Type of mode (analyze or compare)
+        enable_default_compile: Enable default compilation when no compile_command
         check_performance: Whether to run performance profiling
         gpu_arch: GPU architecture
         timeout_seconds: Timeout for profiling operations
-        profiler_args: Additional arguments for the profiler
+        profiler_args: Additional arguments for the profiler (legacy)
+        rocprof_config: rocprof-compute configuration dict
+        ncu_config: ncu configuration dict
         baseline_index: Baseline kernel index for compare mode
     """
     mode_type: ModeType = ModeType.ANALYZE
+    enable_default_compile: bool = False
     check_performance: bool = True
     gpu_arch: str = "gfx942"
-    timeout_seconds: float = 60.0
+    timeout_seconds: float = 300.0
     profiler_args: List[str] = field(default_factory=list)
+    rocprof_config: Dict[str, Any] = field(default_factory=dict)
+    ncu_config: Dict[str, Any] = field(default_factory=dict)
     baseline_index: int = 0  # For compare mode
 
 
@@ -87,10 +93,13 @@ class Task:
                               for cfg in self.kernel_configs],
             "mode_config": {
                 "mode_type": self.mode_config.mode_type.value,
+                "enable_default_compile": self.mode_config.enable_default_compile,
                 "check_performance": self.mode_config.check_performance,
                 "gpu_arch": self.mode_config.gpu_arch,
                 "timeout_seconds": self.mode_config.timeout_seconds,
                 "profiler_args": self.mode_config.profiler_args,
+                "rocprof_config": self.mode_config.rocprof_config,
+                "ncu_config": self.mode_config.ncu_config,
                 "baseline_index": self.mode_config.baseline_index,
             },
             "status": self.status.value,

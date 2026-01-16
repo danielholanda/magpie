@@ -69,6 +69,8 @@ htmlcov/
 .tox/
 .nox/
 .hypothesis/
+.rocprof*/
+.ncu*/
 
 # Type checkers
 .mypy_cache/

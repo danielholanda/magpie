@@ -18,10 +18,12 @@ from ...config import (
     EvalMode,
     PipelineConfig,
     KernelEvalConfig,
+    CompilingConfig,
     CorrectnessConfig,
     CorrectnessMode,
     PerformanceConfig,
 )
+from ...config.performance import RocprofComputeConfig, NcuConfig
 from ...eval import Evaluator, EvaluationState, BaseKind
 
 logger = logging.getLogger(__name__)
@@ -35,19 +37,29 @@ class CompareConfig:
     Attributes:
         baseline_index: Index of baseline kernel for comparison
         gpu_arch: GPU architecture
+        enable_default_compile: Enable default compilation when no compile_command
         check_performance: Whether to run performance profiling
         timeout_seconds: Timeout for profiling operations
-        profiler_args: Additional arguments for the profiler
+        profiler_args: Additional arguments for the profiler (legacy)
+        rocprof_config: rocprof-compute configuration dict
+        ncu_config: ncu configuration dict
     """
     baseline_index: int = 0
     gpu_arch: str = "gfx90a"
+    enable_default_compile: bool = False
     check_performance: bool = True
-    timeout_seconds: float = 60.0
+    timeout_seconds: float = 300.0
     profiler_args: List[str] = None
+    rocprof_config: Dict[str, Any] = None
+    ncu_config: Dict[str, Any] = None
     
     def __post_init__(self):
         if self.profiler_args is None:
             self.profiler_args = []
+        if self.rocprof_config is None:
+            self.rocprof_config = {}
+        if self.ncu_config is None:
+            self.ncu_config = {}
 
 
 @dataclass
@@ -108,17 +120,42 @@ class CompareMode:
             else:
                 corr_mode = CorrectnessMode.RESULT_COMPARISON
             
+            # Build rocprof-compute config if provided
+            rocprof_cfg = None
+            if self.config.rocprof_config:
+                rocprof_cfg = RocprofComputeConfig(
+                    workload_dir=self.config.rocprof_config.get("workload_dir", "./workloads"),
+                    metric_blocks=self.config.rocprof_config.get("metric_blocks", ["1", "2", "5", "10", "11", "12", "14", "16", "17"]),
+                    no_roof=self.config.rocprof_config.get("no_roof", True),
+                    output_format=self.config.rocprof_config.get("output_format", "csv"),
+                    profile_args=self.config.rocprof_config.get("profile_args", []),
+                    analyze_args=self.config.rocprof_config.get("analyze_args", []),
+                )
+            
+            # Build ncu config if provided
+            ncu_cfg = None
+            if self.config.ncu_config:
+                ncu_cfg = NcuConfig(
+                    args=self.config.ncu_config.get("args", []),
+                    metrics=self.config.ncu_config.get("metrics", []),
+                )
+            
             # Build pipeline config
             pipeline_cfg = PipelineConfig(
                 mode=EvalMode.COMPARE,
                 kernel_type=cfg.kernel_type,
                 gpu_arch=self.config.gpu_arch,
+                compiling_config=CompilingConfig(
+                    enable_default_compile=self.config.enable_default_compile,
+                ),
                 correctness_config=CorrectnessConfig(mode=corr_mode),
                 performance_config=PerformanceConfig(
                     enabled=self.config.check_performance,
                     kernel_type=cfg.kernel_type,
                     timeout_seconds=self.config.timeout_seconds,
                     profiler_args=self.config.profiler_args,
+                    rocprof_config=rocprof_cfg,
+                    ncu_config=ncu_cfg,
                 ),
             )
             

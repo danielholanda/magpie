@@ -164,21 +164,33 @@ def _execute_task_worker(task_dict: Dict[str, Any]) -> Dict[str, Any]:
         kernel_configs = []
         for cfg_data in task_dict["kernel_configs"]:
             if isinstance(cfg_data, dict):
-                kernel_configs.append(KernelEvalConfig(**cfg_data))
-            else:
+                kernel_configs.append(KernelEvalConfig.from_dict(cfg_data))
+            elif isinstance(cfg_data, KernelEvalConfig):
                 kernel_configs.append(cfg_data)
+            else:
+                # Skip invalid config data
+                logger.warning(f"Skipping invalid kernel config: {type(cfg_data)}")
+                continue
         
         # Get mode config
         mode_cfg = task_dict["mode_config"]
         mode_type = ModeType(mode_cfg["mode_type"])
         
         if mode_type == ModeType.ANALYZE:
+            # Get kernel type from first config
+            kernel_type = None
+            if kernel_configs:
+                kernel_type = kernel_configs[0].kernel_type
+            
             # Create analyzer
             analyze_config = AnalyzeConfig(
-                kernel_type=kernel_configs[0].kernel_type if kernel_configs else None,
+                kernel_type=kernel_type,
+                enable_default_compile=mode_cfg.get("enable_default_compile", False),
                 check_performance=mode_cfg.get("check_performance", True),
-                timeout_seconds=mode_cfg.get("timeout_seconds", 60.0),
+                timeout_seconds=mode_cfg.get("timeout_seconds", 300.0),
                 profiler_args=mode_cfg.get("profiler_args", []),
+                rocprof_config=mode_cfg.get("rocprof_config", {}),
+                ncu_config=mode_cfg.get("ncu_config", {}),
                 gpu_arch=mode_cfg.get("gpu_arch", "gfx942"),
             )
             analyzer = AnalyzeMode(analyze_config)
@@ -193,9 +205,12 @@ def _execute_task_worker(task_dict: Dict[str, Any]) -> Dict[str, Any]:
             # Create comparator
             compare_config = CompareConfig(
                 baseline_index=mode_cfg.get("baseline_index", 0),
+                enable_default_compile=mode_cfg.get("enable_default_compile", False),
                 check_performance=mode_cfg.get("check_performance", True),
-                timeout_seconds=mode_cfg.get("timeout_seconds", 60.0),
+                timeout_seconds=mode_cfg.get("timeout_seconds", 300.0),
                 profiler_args=mode_cfg.get("profiler_args", []),
+                rocprof_config=mode_cfg.get("rocprof_config", {}),
+                ncu_config=mode_cfg.get("ncu_config", {}),
                 gpu_arch=mode_cfg.get("gpu_arch", "gfx942"),
             )
             comparator = CompareMode(compare_config)

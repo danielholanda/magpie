@@ -1,4 +1,4 @@
-# AIG-Kernel-Eval Framework Configuration
+# Magpie Framework Configuration
 # ========================================
 # This is the framework configuration file.
 # Kernel-specific configurations are separate (see kernel_config.yaml.example)
@@ -66,21 +66,58 @@ logging:
   file: null   # Set path for file logging
 
 # =============================================================================
+# Compiling
+# =============================================================================
+compiling:
+  # Enable default compilation when no compile_command is provided
+  # If false (default), compilation is skipped for pre-compiled kernels
+  # If true, will attempt to compile using hipcc/nvcc based on kernel type
+  enable_default_compile: false
+
+# =============================================================================
 # Performance Profiling
 # =============================================================================
 performance:
   # Timeout for profiling operations (seconds)
-  timeout_seconds: 120
+  timeout_seconds: 300
   
   # rocprof-compute settings (AMD GPU)
-  # Additional arguments passed to rocprof-compute
+  # Two-stage profiler: profile (collect data) + analyze (generate metrics)
   rocprof_compute:
-    args: []
+    # Directory to save profiling workloads (relative to kernel working_dir)
+    workload_dir: "./workloads"
+    
+    # Metric blocks to collect (for gfx942/MI300 series)
+    # Using reduced set for faster profiling:
+    #   1: System Info
+    #   2: System Speed-of-Light (FLOPS, utilization, bandwidth)
+    #   5: Command Processor (CPC/CPF)
+    #  10: Compute Units - Instruction Mix
+    #  11: Compute Units - Compute Pipeline
+    #  12: Local Data Share (LDS)
+    #  14: Scalar L1 Data Cache
+    #  16: Vector L1 Data Cache
+    #  17: L2 Cache
+    metric_blocks: ["1", "2", "5", "10", "11", "12", "14", "16", "17"]
+    
+    # Skip roofline collection (faster profiling)
+    no_roof: true
+    
+    # Output format for analyze stage
+    output_format: "csv"
+    
+    # Additional profile arguments
+    profile_args: []
+    
+    # Additional analyze arguments  
+    analyze_args: []
     
   # ncu settings (NVIDIA GPU)
   # Additional arguments passed to ncu
   ncu:
     args: ["--target-processes", "all"]
+    # Specific metrics to collect (empty = default set)
+    metrics: []
 
 # =============================================================================
 # Scheduler
