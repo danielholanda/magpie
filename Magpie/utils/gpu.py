@@ -482,13 +482,14 @@ def get_gpu_count() -> int:
             capture_output=True, text=True, timeout=10
         )
         if result.returncode == 0:
-            # Count GPU lines
-            count = 0
+            # Count unique GPU IDs (each GPU has multiple lines in output)
+            gpu_ids = set()
             for line in result.stdout.split('\n'):
-                if re.match(r'^\s*GPU\[\d+\]', line):
-                    count += 1
-            if count > 0:
-                return count
+                match = re.match(r'^\s*GPU\[(\d+)\]', line)
+                if match:
+                    gpu_ids.add(int(match.group(1)))
+            if gpu_ids:
+                return len(gpu_ids)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
     

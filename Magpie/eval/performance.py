@@ -95,6 +95,7 @@ class PerformanceResult:
         return {
             "success": self.success,
             "errors": self.errors,
+            "command": self.command,
             "workload_dir": self.workload_dir,
             # Summary metrics in a flat format for easy access
             "summary": self.get_summary_metrics(),
