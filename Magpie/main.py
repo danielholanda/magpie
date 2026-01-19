@@ -530,17 +530,29 @@ def _save_comparison(comparison: Any, output_dir: Path) -> None:
     
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_file = output_dir / f"comparison_{timestamp}.json"
+    output_file = output_dir / f"compare_results_{timestamp}.json"
     
+    # Extract comparison data
     if isinstance(comparison, dict):
-        data = comparison
+        comparison_data = comparison
     elif hasattr(comparison, 'to_dict'):
-        data = comparison.to_dict()
+        comparison_data = comparison.to_dict()
     else:
-        data = {"result": str(comparison)}
+        comparison_data = {"result": str(comparison)}
     
+    # Use same format as analyze: mode, timestamp, results
     with open(output_file, "w") as f:
-        json.dump(data, f, indent=2)
+        json.dump({
+            "mode": "compare",
+            "timestamp": timestamp,
+            "results": {
+                "kernel_results": comparison_data.get("kernel_results", []),
+                "comparison_metrics": comparison_data.get("comparison_metrics", {}),
+                "winner": comparison_data.get("winner"),
+                "rankings": comparison_data.get("rankings", []),
+                "summary": comparison_data.get("summary", ""),
+            }
+        }, f, indent=2)
     
     logger.info(f"Comparison saved to {output_file}")
 
@@ -553,10 +565,13 @@ def create_parser() -> argparse.ArgumentParser:
         epilog=__doc__
     )
     
+    # Default config: use config.yaml relative to Magpie package
+    default_config = Path(__file__).parent / "config.yaml"
+    
     parser.add_argument(
         "--config", "-c",
         type=Path,
-        default=Path("config.yaml"),
+        default=default_config,
         help="Framework configuration file"
     )
     parser.add_argument(

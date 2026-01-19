@@ -65,6 +65,59 @@ class EvaluationState:
             "performance_result": self.performance_result.to_dict() if self.performance_result else None,
             "extra": self.extra,
         }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "EvaluationState":
+        """
+        Reconstruct EvaluationState from dictionary.
+        
+        Args:
+            data: Dictionary representation of EvaluationState
+            
+        Returns:
+            Reconstructed EvaluationState object
+        """
+        state = cls()
+        
+        # Restore states
+        state.compiling_state = BaseKind[data.get("compiling_state", "SUCCESS")]
+        state.correctness_state = BaseKind[data.get("correctness_state", "SUCCESS")]
+        state.performance_state = BaseKind[data.get("performance_state", "SUCCESS")]
+        
+        # Restore errors and score
+        state.errors = data.get("errors", [])
+        state.score = data.get("score", 0.0)
+        
+        # Restore compiling result
+        compiling_data = data.get("compiling_result")
+        if compiling_data:
+            state.compiling_result = CompilingResult(
+                success=compiling_data.get("success", False),
+                errors=compiling_data.get("errors"),
+            )
+        
+        # Restore correctness result
+        correctness_data = data.get("correctness_result")
+        if correctness_data:
+            state.correctness_result = CorrectnessResult(
+                success=correctness_data.get("success", False),
+                errors=correctness_data.get("errors"),
+            )
+        
+        # Restore performance result
+        perf_data = data.get("performance_result")
+        if perf_data:
+            state.performance_result = PerformanceResult(
+                success=perf_data.get("success", False),
+                errors=perf_data.get("errors"),
+                command=perf_data.get("command"),
+                workload_dir=perf_data.get("workload_dir"),
+            )
+        
+        # Restore extra
+        state.extra = data.get("extra", {})
+        
+        return state
 
 
 class Evaluator:

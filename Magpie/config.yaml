@@ -10,7 +10,7 @@
 # Used by: scheduler, hardware controller, profiler
 gpu:
   # List of GPU device IDs to use (null = all available GPUs)
-  device_ids: [0]           # e.g., [0, 1, 2, 3] for specific GPUs
+  device_ids: null           # e.g., [0, 1, 2, 3] for specific GPUs
   
   # Whether to apply operations in parallel (faster for multi-GPU)
   parallel: true
@@ -50,6 +50,18 @@ gpu:
     #     power:
     #       limit_watts: 250
     per_gpu: {}
+
+# =============================================================================
+# Scheduler
+# =============================================================================
+scheduler:
+  # Maximum number of parallel workers (processes) for task execution
+  max_workers: 8
+  
+  # Execution environment: local, docker
+  environment: local
+
+  docker_image: null
 
 # =============================================================================
 # Output Settings
@@ -118,17 +130,3 @@ performance:
     args: ["--target-processes", "all"]
     # Specific metrics to collect (empty = default set)
     metrics: []
-
-# =============================================================================
-# Scheduler
-# =============================================================================
-# Note: GPU devices are now configured in the 'gpu' section above.
-# The scheduler will use gpu.device_ids automatically.
-scheduler:
-  max_concurrent_tasks: 1
-  environment: local  # local, docker
-  
-  # Retry settings
-  retry:
-    enabled: true
-    max_retries: 3

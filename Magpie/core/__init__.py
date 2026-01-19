@@ -26,7 +26,6 @@ from .scheduler import (
     Scheduler,
     SchedulerConfig,
     EnvironmentType,
-    WorkloadConfig,  # Backwards compatibility alias
 )
 
 __all__ = [
@@ -47,5 +46,4 @@ __all__ = [
     "Scheduler",
     "SchedulerConfig",
     "EnvironmentType",
-    "WorkloadConfig",  # Backwards compatibility
 ]

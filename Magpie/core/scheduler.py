@@ -382,6 +382,152 @@ class Scheduler:
         
         return results
     
+    def submit_batch(self, tasks: List[Task]) -> List[str]:
+        """
+        Submit multiple tasks for parallel execution.
+        
+        Args:
+            tasks: List of tasks to submit
+            
+        Returns:
+            List of task IDs
+        """
+        task_ids = []
+        for task in tasks:
+            task_id = self.submit(task)
+            task_ids.append(task_id)
+        return task_ids
+    
+    def execute_batch(self, tasks: List[Task]) -> List[TaskResult]:
+        """
+        Execute multiple tasks in parallel and wait for all results.
+        
+        This is the recommended way to run multiple tasks in parallel.
+        Uses the executor's ProcessPoolExecutor for parallel execution.
+        
+        Args:
+            tasks: List of tasks to execute
+            
+        Returns:
+            List of TaskResults in the same order as input tasks
+        """
+        if not self._is_initialized:
+            raise RuntimeError("Scheduler is not initialized. Call initialize() first.")
+        
+        if not tasks:
+            return []
+        
+        # Submit all tasks
+        logger.info(f"Submitting {len(tasks)} tasks for parallel execution")
+        task_ids = self.submit_batch(tasks)
+        
+        # Wait for all to complete
+        results = self.wait_all()
+        
+        # Sort results to match input order
+        result_map = {r.task_id: r for r in results}
+        ordered_results = [result_map.get(tid) for tid in task_ids]
+        
+        return ordered_results
+    
+    def run_analyze_batch(
+        self,
+        kernel_configs_list: List[List[KernelEvalConfig]],
+        enable_default_compile: bool = False,
+        check_performance: bool = True,
+        gpu_arch: str = "gfx942",
+        timeout_seconds: float = 300.0,
+        profiler_args: Optional[List[str]] = None,
+        rocprof_config: Optional[Dict[str, Any]] = None,
+        ncu_config: Optional[Dict[str, Any]] = None,
+    ) -> List[TaskResult]:
+        """
+        Run multiple analyze tasks in parallel at Scheduler level.
+        
+        Each item in kernel_configs_list becomes a separate Task that runs in parallel.
+        
+        Args:
+            kernel_configs_list: List of kernel config lists (each becomes a Task)
+            Other args same as run_analyze
+            
+        Returns:
+            List of TaskResults
+            
+        Example:
+            # Run 4 analyze tasks in parallel
+            results = scheduler.run_analyze_batch([
+                [kernel_config_1],
+                [kernel_config_2],
+                [kernel_config_3],
+                [kernel_config_4],
+            ])
+        """
+        tasks = []
+        for kernel_configs in kernel_configs_list:
+            task = self.create_task(
+                kernel_configs=kernel_configs,
+                mode_type=ModeType.ANALYZE,
+                enable_default_compile=enable_default_compile,
+                check_performance=check_performance,
+                gpu_arch=gpu_arch,
+                timeout_seconds=timeout_seconds,
+                profiler_args=profiler_args,
+                rocprof_config=rocprof_config,
+                ncu_config=ncu_config,
+            )
+            tasks.append(task)
+        
+        return self.execute_batch(tasks)
+    
+    def run_compare_batch(
+        self,
+        kernel_configs_list: List[List[KernelEvalConfig]],
+        baseline_index: int = 0,
+        enable_default_compile: bool = False,
+        check_performance: bool = True,
+        gpu_arch: str = "gfx942",
+        timeout_seconds: float = 300.0,
+        profiler_args: Optional[List[str]] = None,
+        rocprof_config: Optional[Dict[str, Any]] = None,
+        ncu_config: Optional[Dict[str, Any]] = None,
+    ) -> List[TaskResult]:
+        """
+        Run multiple compare tasks in parallel at Scheduler level.
+        
+        Each item in kernel_configs_list becomes a separate Task that runs in parallel.
+        
+        Args:
+            kernel_configs_list: List of kernel config lists (each becomes a Compare Task)
+            Other args same as run_compare
+            
+        Returns:
+            List of TaskResults
+            
+        Example:
+            # Run 2 compare tasks in parallel
+            results = scheduler.run_compare_batch([
+                [baseline_1, optimized_1a, optimized_1b],  # Compare set 1
+                [baseline_2, optimized_2a, optimized_2b],  # Compare set 2
+            ])
+        """
+        tasks = []
+        for kernel_configs in kernel_configs_list:
+            task = self.create_task(
+                kernel_configs=kernel_configs,
+                mode_type=ModeType.COMPARE,
+                enable_default_compile=enable_default_compile,
+                baseline_index=baseline_index,
+                check_performance=check_performance,
+                gpu_arch=gpu_arch,
+                timeout_seconds=timeout_seconds,
+                profiler_args=profiler_args,
+                rocprof_config=rocprof_config,
+                ncu_config=ncu_config,
+            )
+            tasks.append(task)
+        
+        return self.execute_batch(tasks)
+    
     def get_task_status(self, task_id: str) -> Optional[TaskStatus]:
         """
         Get the status of a task.
@@ -460,7 +606,3 @@ class Scheduler:
         self._completed_tasks.clear()
         self._is_initialized = False
         logger.info("Scheduler shutdown completed")
-
-
-# Backwards compatibility alias
-WorkloadConfig = SchedulerConfig

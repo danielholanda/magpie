@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ...config import (
@@ -107,9 +106,20 @@ class CompareMode:
         if len(kernel_configs) < 2:
             raise ValueError("Need at least 2 kernels for comparison")
         
-        logger.info(f"Comparing {len(kernel_configs)} kernels")
+        logger.info(f"Comparing {len(kernel_configs)} kernels sequentially")
+        results = self._compare_sequential(kernel_configs)
         
-        # Evaluate all kernels
+        # Build comparison
+        comparison = self._build_comparison(results, kernel_configs)
+        self._log_summary(comparison)
+        
+        return comparison
+    
+    def _compare_sequential(
+        self, 
+        kernel_configs: List[KernelEvalConfig]
+    ) -> List[EvaluationState]:
+        """Evaluate kernels sequentially."""
         results = []
         for i, cfg in enumerate(kernel_configs):
             logger.info(f"Evaluating kernel {i+1}/{len(kernel_configs)}: {cfg.kernel_id}")
@@ -163,11 +173,7 @@ class CompareMode:
             state = evaluator.evaluate(cfg)
             results.append(state)
         
-        # Build comparison
-        comparison = self._build_comparison(results, kernel_configs)
-        self._log_summary(comparison)
-        
-        return comparison
+        return results
     
     def _build_comparison(
         self, 
@@ -237,4 +243,3 @@ class CompareMode:
         for line in comparison.summary.split("\n"):
             if line.strip():
                 logger.info(f"  {line}")
-

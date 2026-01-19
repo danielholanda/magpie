@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .task import Task, TaskResult, TaskStatus, ModeType
 from ..config import KernelEvalConfig
+from ..utils.gpu import get_gpu_count
 
 logger = logging.getLogger(__name__)
 
@@ -135,109 +136,6 @@ class BaseExecutor(ABC):
         return self._is_running
 
 
-def _execute_task_worker(task_dict: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Worker function for executing tasks in separate processes.
-    
-    This function is pickled and sent to worker processes.
-    
-    Args:
-        task_dict: Serialized task data
-        
-    Returns:
-        Serialized TaskResult
-    """
-    import time
-    from .task import Task, TaskResult, TaskStatus, ModeType, ModeConfig
-    from ..config import KernelEvalConfig
-    from ..modes import AnalyzeMode, CompareMode
-    from ..modes.analyze_eval.analyzer import AnalyzeConfig
-    from ..modes.compare_eval.comparator import CompareConfig
-    
-    start_time = time.time()
-    task_id = task_dict["task_id"]
-    errors = []
-    results = None
-    
-    try:
-        # Reconstruct kernel configs
-        kernel_configs = []
-        for cfg_data in task_dict["kernel_configs"]:
-            if isinstance(cfg_data, dict):
-                kernel_configs.append(KernelEvalConfig.from_dict(cfg_data))
-            elif isinstance(cfg_data, KernelEvalConfig):
-                kernel_configs.append(cfg_data)
-            else:
-                # Skip invalid config data
-                logger.warning(f"Skipping invalid kernel config: {type(cfg_data)}")
-                continue
-        
-        # Get mode config
-        mode_cfg = task_dict["mode_config"]
-        mode_type = ModeType(mode_cfg["mode_type"])
-        
-        if mode_type == ModeType.ANALYZE:
-            # Get kernel type from first config
-            kernel_type = None
-            if kernel_configs:
-                kernel_type = kernel_configs[0].kernel_type
-            
-            # Create analyzer
-            analyze_config = AnalyzeConfig(
-                kernel_type=kernel_type,
-                enable_default_compile=mode_cfg.get("enable_default_compile", False),
-                check_performance=mode_cfg.get("check_performance", True),
-                timeout_seconds=mode_cfg.get("timeout_seconds", 300.0),
-                profiler_args=mode_cfg.get("profiler_args", []),
-                rocprof_config=mode_cfg.get("rocprof_config", {}),
-                ncu_config=mode_cfg.get("ncu_config", {}),
-                gpu_arch=mode_cfg.get("gpu_arch", "gfx942"),
-            )
-            analyzer = AnalyzeMode(analyze_config)
-            
-            # Execute analysis
-            results = []
-            for kernel_cfg in kernel_configs:
-                result = analyzer.analyze(kernel_cfg)
-                results.append(result)
-                
-        elif mode_type == ModeType.COMPARE:
-            # Create comparator
-            compare_config = CompareConfig(
-                baseline_index=mode_cfg.get("baseline_index", 0),
-                enable_default_compile=mode_cfg.get("enable_default_compile", False),
-                check_performance=mode_cfg.get("check_performance", True),
-                timeout_seconds=mode_cfg.get("timeout_seconds", 300.0),
-                profiler_args=mode_cfg.get("profiler_args", []),
-                rocprof_config=mode_cfg.get("rocprof_config", {}),
-                ncu_config=mode_cfg.get("ncu_config", {}),
-                gpu_arch=mode_cfg.get("gpu_arch", "gfx942"),
-            )
-            comparator = CompareMode(compare_config)
-            
-            # Execute comparison
-            results = comparator.compare(kernel_configs)
-        
-        status = TaskStatus.COMPLETED
-        
-    except Exception as e:
-        errors.append(str(e))
-        status = TaskStatus.FAILED
-        logger.exception(f"Task {task_id} failed with error: {e}")
-    
-    execution_time = time.time() - start_time
-    
-    # Return serializable result
-    result = TaskResult(
-        task_id=task_id,
-        status=status,
-        results=results,
-        errors=errors,
-        execution_time=execution_time,
-    )
-    return result.to_dict()
-
-
 class LocalExecutor(BaseExecutor):
     """
     Local executor using multiprocessing.
@@ -271,9 +169,8 @@ class LocalExecutor(BaseExecutor):
             return True
         
         # Verify GPU availability
-        if not self._check_gpu_availability():
-            logger.warning("No GPU detected, continuing anyway")
-        
+        _ = self._check_gpu_availability()
+
         # Create process pool
         try:
             self._pool = ProcessPoolExecutor(max_workers=self.config.max_workers)
@@ -412,24 +309,16 @@ class LocalExecutor(BaseExecutor):
         return results
     
     def _check_gpu_availability(self) -> bool:
-        """Check GPU availability."""
-        try:
-            result = subprocess.run(
-                ["nvidia-smi", "--query-gpu=name,index", "--format=csv,noheader"],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            if result.returncode == 0:
-                gpus = result.stdout.strip().split("\n")
-                self._available_gpus = list(range(len(gpus)))
-                logger.info(f"Found {len(gpus)} GPU(s)")
-                return True
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            pass
+        """Check GPU availability. Exit with error if no GPU is found."""
+        gpu_count = get_gpu_count()
         
-        self._available_gpus = []
-        return False
+        if gpu_count > 0:
+            self._available_gpus = list(range(gpu_count))
+            logger.info(f"Found {gpu_count} GPU(s)")
+            return True
+        else:
+            logger.error("No GPU detected. Please ensure GPU drivers (AMD ROCm or NVIDIA CUDA) are installed.")
+            raise RuntimeError("GPU check failed: No GPU detected")
 
 
 class ContainerExecutor(BaseExecutor):
@@ -651,3 +540,106 @@ def create_executor(config: ExecutorConfig) -> BaseExecutor:
         return ContainerExecutor(config)
     else:
         raise ValueError(f"Unknown executor type: {config.executor_type}")
+
+
+def _execute_task_worker(task_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Worker function for executing tasks in separate processes.
+    
+    This function is pickled and sent to worker processes.
+    
+    Args:
+        task_dict: Serialized task data
+        
+    Returns:
+        Serialized TaskResult
+    """
+    import time
+    from .task import Task, TaskResult, TaskStatus, ModeType, ModeConfig
+    from ..config import KernelEvalConfig
+    from ..modes import AnalyzeMode, CompareMode
+    from ..modes.analyze_eval.analyzer import AnalyzeConfig
+    from ..modes.compare_eval.comparator import CompareConfig
+    
+    start_time = time.time()
+    task_id = task_dict["task_id"]
+    errors = []
+    results = None
+    
+    try:
+        # Reconstruct kernel configs
+        kernel_configs = []
+        for cfg_data in task_dict["kernel_configs"]:
+            if isinstance(cfg_data, dict):
+                kernel_configs.append(KernelEvalConfig.from_dict(cfg_data))
+            elif isinstance(cfg_data, KernelEvalConfig):
+                kernel_configs.append(cfg_data)
+            else:
+                # Skip invalid config data
+                logger.warning(f"Skipping invalid kernel config: {type(cfg_data)}")
+                continue
+        
+        # Get mode config
+        mode_cfg = task_dict["mode_config"]
+        mode_type = ModeType(mode_cfg["mode_type"])
+        
+        if mode_type == ModeType.ANALYZE:
+            # Get kernel type from first config
+            kernel_type = None
+            if kernel_configs:
+                kernel_type = kernel_configs[0].kernel_type
+            
+            # Create analyzer
+            analyze_config = AnalyzeConfig(
+                kernel_type=kernel_type,
+                enable_default_compile=mode_cfg.get("enable_default_compile", False),
+                check_performance=mode_cfg.get("check_performance", True),
+                timeout_seconds=mode_cfg.get("timeout_seconds", 300.0),
+                profiler_args=mode_cfg.get("profiler_args", []),
+                rocprof_config=mode_cfg.get("rocprof_config", {}),
+                ncu_config=mode_cfg.get("ncu_config", {}),
+                gpu_arch=mode_cfg.get("gpu_arch", "gfx942"),
+            )
+            analyzer = AnalyzeMode(analyze_config)
+            
+            # Execute analysis
+            results = []
+            for kernel_cfg in kernel_configs:
+                result = analyzer.analyze(kernel_cfg)
+                results.append(result)
+                
+        elif mode_type == ModeType.COMPARE:
+            # Create comparator
+            compare_config = CompareConfig(
+                baseline_index=mode_cfg.get("baseline_index", 0),
+                enable_default_compile=mode_cfg.get("enable_default_compile", False),
+                check_performance=mode_cfg.get("check_performance", True),
+                timeout_seconds=mode_cfg.get("timeout_seconds", 300.0),
+                profiler_args=mode_cfg.get("profiler_args", []),
+                rocprof_config=mode_cfg.get("rocprof_config", {}),
+                ncu_config=mode_cfg.get("ncu_config", {}),
+                gpu_arch=mode_cfg.get("gpu_arch", "gfx942"),
+            )
+            comparator = CompareMode(compare_config)
+            
+            # Execute comparison
+            results = comparator.compare(kernel_configs)
+        
+        status = TaskStatus.COMPLETED
+        
+    except Exception as e:
+        errors.append(str(e))
+        status = TaskStatus.FAILED
+        logger.exception(f"Task {task_id} failed with error: {e}")
+    
+    execution_time = time.time() - start_time
+    
+    # Return serializable result
+    result = TaskResult(
+        task_id=task_id,
+        status=status,
+        results=results,
+        errors=errors,
+        execution_time=execution_time,
+    )
+    return result.to_dict()

@@ -21,6 +21,7 @@ import json
 import logging
 import glob
 import os
+import yaml
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
@@ -32,6 +33,64 @@ mcp = FastMCP("magpie")
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _load_framework_config() -> Dict[str, Any]:
+    """
+    Load framework configuration from config.yaml.
+    
+    Searches for config.yaml in:
+    1. Current directory
+    2. Magpie package directory
+    
+    Returns:
+        Configuration dictionary
+    """
+    # Try current directory first
+    config_paths = [
+        Path.cwd() / "config.yaml",
+        Path.cwd() / "Magpie" / "config.yaml",
+        Path(__file__).parent.parent / "config.yaml",  # Magpie/config.yaml
+    ]
+    
+    for config_path in config_paths:
+        if config_path.exists():
+            try:
+                with open(config_path) as f:
+                    return yaml.safe_load(f) or {}
+            except Exception as e:
+                logger.warning(f"Failed to load config from {config_path}: {e}")
+    
+    return {}
+
+
+def _get_scheduler_config_from_yaml(environment: str = "local") -> "SchedulerConfig":
+    """
+    Get scheduler configuration from framework config.yaml.
+    
+    Args:
+        environment: Execution environment override
+        
+    Returns:
+        SchedulerConfig with settings from config.yaml
+    """
+    from ..core import SchedulerConfig, EnvironmentType
+    
+    config = _load_framework_config()
+    sched_cfg = config.get("scheduler", {})
+    
+    # Get settings from config, with defaults
+    max_workers = sched_cfg.get("max_workers", 1)
+    docker_image = sched_cfg.get("docker_image", None)
+    
+    # Environment can be overridden by parameter
+    env_type = EnvironmentType(environment.lower())
+    
+    return SchedulerConfig(
+        environment_type=env_type,
+        max_workers=max_workers,
+        docker_image=docker_image,
+    )
 
 
 # =============================================================================
@@ -111,7 +170,7 @@ def analyze(
           - workload_dir: path to raw profiler data
     """
     from ..config import KernelType, KernelEvalConfig
-    from ..core import Scheduler, SchedulerConfig, EnvironmentType
+    from ..core import Scheduler
     
     try:
         # Parse kernel type
@@ -133,9 +192,8 @@ def analyze(
             working_dir=working_dir or str(kernel_file.parent),
         )
         
-        # Create scheduler
-        env_type = EnvironmentType(environment.lower())
-        scheduler_config = SchedulerConfig(environment_type=env_type)
+        # Create scheduler with config from config.yaml
+        scheduler_config = _get_scheduler_config_from_yaml(environment)
         scheduler = Scheduler(scheduler_config)
         
         if not scheduler.initialize():
@@ -344,7 +402,7 @@ def compare(
         JSON with comparison results, ranking, and summary
     """
     from ..config import KernelType, KernelEvalConfig
-    from ..core import Scheduler, SchedulerConfig, EnvironmentType
+    from ..core import Scheduler
     
     try:
         if len(kernel_paths) < 2:
@@ -368,9 +426,8 @@ def compare(
                 working_dir=str(kernel_file.parent),
             ))
         
-        # Create scheduler
-        env_type = EnvironmentType(environment.lower())
-        scheduler_config = SchedulerConfig(environment_type=env_type)
+        # Create scheduler with config from config.yaml
+        scheduler_config = _get_scheduler_config_from_yaml(environment)
         scheduler = Scheduler(scheduler_config)
         
         if not scheduler.initialize():

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ...config import (
@@ -140,21 +139,32 @@ class AnalyzeMode:
         self, 
         kernel_configs: List[KernelEvalConfig]
     ) -> List[EvaluationState]:
-        """Analyze multiple kernels."""
+        """
+        Analyze multiple kernels sequentially.
+        
+        Args:
+            kernel_configs: List of kernel configurations to analyze
+            
+        Returns:
+            List of EvaluationState results
+        """
+        if not kernel_configs:
+            return []
+        
+        logger.info(f"Analyzing {len(kernel_configs)} kernels sequentially")
+        
         results = []
-        for i, cfg in enumerate(kernel_configs):
-            logger.info(f"Analyzing kernel {i+1}/{len(kernel_configs)}: {cfg.kernel_id}")
-            result = self.analyze(cfg)
-            results.append(result)
+        for i, kernel_cfg in enumerate(kernel_configs):
+            logger.info(f"Analyzing kernel {i+1}/{len(kernel_configs)}: {kernel_cfg.kernel_id}")
+            state = self.analyze(kernel_cfg)
+            results.append(state)
+        
         return results
     
     def _log_summary(self, kernel_cfg: KernelEvalConfig, state: EvaluationState) -> None:
         """Log analysis summary."""
-        from ...eval import BaseKind
-        
         logger.info(f"Analysis complete: {kernel_cfg.kernel_id}")
         logger.info(f"  Compiling: {state.compiling_state.name}")
         logger.info(f"  Correctness: {state.correctness_state.name}")
         logger.info(f"  Performance: {state.performance_state.name}")
         logger.info(f"  Score: {state.score:.2f}")
-
