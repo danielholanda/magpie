@@ -1,3 +1,8 @@
+###############################################################################
+# Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
+#
+# See LICENSE for license information.
+###############################################################################
 """
 Task definitions for kernel evaluation.
 
