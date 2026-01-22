@@ -20,10 +20,9 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .task import Task, TaskResult, TaskStatus, ModeType, ModeConfig
 from .executor import (
-    BaseExecutor, 
-    LocalExecutor, 
-    ContainerExecutor,
-    ExecutorConfig, 
+    BaseExecutor,
+    LocalExecutor,
+    ExecutorConfig,
     ExecutorType,
     create_executor,
 )
@@ -34,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 class EnvironmentType(Enum):
     """Type of execution environment."""
+
     LOCAL = "local"
     CONTAINER = "container"
     # Future: DISTRIBUTED = "distributed"
@@ -43,7 +43,7 @@ class EnvironmentType(Enum):
 class SchedulerConfig:
     """
     Configuration for the scheduler.
-    
+
     Attributes:
         environment_type: Type of execution environment
         max_workers: Maximum number of concurrent workers
@@ -53,6 +53,7 @@ class SchedulerConfig:
         pre_hooks: Functions to run before task execution
         post_hooks: Functions to run after task execution
     """
+
     environment_type: EnvironmentType = EnvironmentType.LOCAL
     max_workers: int = 1
     docker_image: Optional[str] = None
@@ -60,7 +61,7 @@ class SchedulerConfig:
     timeout_seconds: float = 300.0
     pre_hooks: List[Callable[[Task], None]] = field(default_factory=list)
     post_hooks: List[Callable[[Task, TaskResult], None]] = field(default_factory=list)
-    
+
     def __post_init__(self):
         if isinstance(self.environment_type, str):
             self.environment_type = EnvironmentType(self.environment_type)
@@ -69,7 +70,7 @@ class SchedulerConfig:
 class Scheduler:
     """
     Task scheduler for kernel evaluation.
-    
+
     The scheduler is the main entry point for CLI/MCP to submit tasks.
     It handles:
     - Creating appropriate executors based on environment type
@@ -77,11 +78,11 @@ class Scheduler:
     - Running pre/post execution hooks
     - Tracking task status and results
     """
-    
+
     def __init__(self, config: Optional[SchedulerConfig] = None):
         """
         Initialize the scheduler.
-        
+
         Args:
             config: Scheduler configuration
         """
@@ -90,35 +91,37 @@ class Scheduler:
         self._task_queue: List[Task] = []
         self._completed_tasks: Dict[str, TaskResult] = {}
         self._is_initialized = False
-        
+
     def initialize(self) -> bool:
         """
         Initialize the scheduler and create executor.
-        
+
         Returns:
             True if initialization succeeded, False otherwise
         """
         if self._is_initialized:
             logger.warning("Scheduler is already initialized")
             return True
-        
-        logger.info(f"Initializing scheduler with {self.config.environment_type.value} environment")
-        
+
+        logger.info(
+            f"Initializing scheduler with {self.config.environment_type.value} environment"
+        )
+
         # Create executor config
         executor_config = self._create_executor_config()
-        
+
         # Create executor
         self._executor = create_executor(executor_config)
-        
+
         # Start executor
         if not self._executor.start():
             logger.error("Failed to start executor")
             return False
-        
+
         self._is_initialized = True
         logger.info("Scheduler initialized successfully")
         return True
-    
+
     def _create_executor_config(self) -> ExecutorConfig:
         """Create executor configuration based on scheduler config."""
         if self.config.environment_type == EnvironmentType.LOCAL:
@@ -127,7 +130,7 @@ class Scheduler:
             executor_type = ExecutorType.CONTAINER
         else:
             executor_type = ExecutorType.LOCAL
-        
+
         return ExecutorConfig(
             executor_type=executor_type,
             max_workers=self.config.max_workers,
@@ -135,7 +138,7 @@ class Scheduler:
             docker_image=self.config.docker_image,
             timeout_seconds=self.config.timeout_seconds,
         )
-    
+
     def create_task(
         self,
         kernel_configs: List[KernelEvalConfig],
@@ -153,7 +156,7 @@ class Scheduler:
     ) -> Task:
         """
         Create a new task.
-        
+
         Args:
             kernel_configs: Kernel configurations to evaluate
             mode_type: Type of evaluation mode
@@ -167,7 +170,7 @@ class Scheduler:
             baseline_index: Baseline kernel index for compare mode
             priority: Task priority
             metadata: Additional metadata
-            
+
         Returns:
             Created Task object
         """
@@ -182,75 +185,77 @@ class Scheduler:
             ncu_config=ncu_config or {},
             baseline_index=baseline_index,
         )
-        
+
         task = Task(
             kernel_configs=kernel_configs,
             mode_config=mode_config,
             priority=priority,
             metadata=metadata or {},
         )
-        
+
         logger.debug(f"Created task {task.task_id} with mode {mode_type.value}")
         return task
-    
+
     def submit(self, task: Task) -> str:
         """
         Submit a task for execution.
-        
+
         The task will be added to the queue and executed
         when a worker becomes available.
-        
+
         Args:
             task: Task to execute
-            
+
         Returns:
             Task ID
         """
         if not self._is_initialized:
             raise RuntimeError("Scheduler is not initialized. Call initialize() first.")
-        
+
         # Run pre-hooks
         self._run_pre_hooks(task)
-        
+
         # Add to queue
         self._task_queue.append(task)
-        
+
         # Submit to executor
+        assert self._executor is not None
         task_id = self._executor.submit(task)
-        
+
         logger.info(f"Task {task_id} submitted to scheduler")
         return task_id
-    
+
     def execute(self, task: Task) -> TaskResult:
         """
         Execute a task synchronously.
-        
+
         This method blocks until the task completes.
-        
+
         Args:
             task: Task to execute
-            
+
         Returns:
             TaskResult with execution results
         """
         if not self._is_initialized:
             raise RuntimeError("Scheduler is not initialized. Call initialize() first.")
-        
+
         # Run pre-hooks
         self._run_pre_hooks(task)
-        
+
         # Execute directly
+        assert self._executor is not None
         result = self._executor.execute(task)
-        
+
         # Run post-hooks
         self._run_post_hooks(task, result)
-        
+
         # Store result
         self._completed_tasks[task.task_id] = result
-        
+
         logger.info(f"Task {task.task_id} completed with status: {result.status.value}")
         return result
-    
+
     def run_analyze(
         self,
         kernel_configs: List[KernelEvalConfig],
@@ -264,7 +269,7 @@ class Scheduler:
     ) -> TaskResult:
         """
         Convenience method to run analyze mode.
-        
+
         Args:
             kernel_configs: Kernel configurations to analyze
             enable_default_compile: Enable default compilation when no compile_command
@@ -274,7 +279,7 @@ class Scheduler:
             profiler_args: Additional arguments for the profiler (legacy)
             rocprof_config: rocprof-compute configuration dict
             ncu_config: ncu configuration dict
-            
+
         Returns:
             TaskResult with analysis results
         """
@@ -290,7 +295,7 @@ class Scheduler:
             ncu_config=ncu_config,
         )
         return self.execute(task)
-    
+
     def run_compare(
         self,
         kernel_configs: List[KernelEvalConfig],
@@ -305,7 +310,7 @@ class Scheduler:
     ) -> TaskResult:
         """
         Convenience method to run compare mode.
-        
+
         Args:
             kernel_configs: Kernel configurations to compare
             baseline_index: Index of baseline kernel
@@ -316,7 +321,7 @@ class Scheduler:
             profiler_args: Additional arguments for the profiler (legacy)
             rocprof_config: rocprof-compute configuration dict
             ncu_config: ncu configuration dict
-            
+
         Returns:
             TaskResult with comparison results
         """
@@ -333,50 +338,52 @@ class Scheduler:
             ncu_config=ncu_config,
         )
         return self.execute(task)
-    
-    def wait_for_task(self, task_id: str, timeout: Optional[float] = None) -> TaskResult:
+
+    def wait_for_task(
+        self, task_id: str, timeout: Optional[float] = None
+    ) -> TaskResult:
         """
         Wait for a specific task to complete.
-        
+
         Args:
             task_id: Task ID to wait for
             timeout: Maximum time to wait in seconds
-            
+
         Returns:
             TaskResult when task completes
         """
         if task_id in self._completed_tasks:
             return self._completed_tasks[task_id]
-        
+
         if isinstance(self._executor, LocalExecutor):
             result = self._executor.wait_for_task(task_id, timeout)
-            
+
             # Find task and run post-hooks
             for task in self._task_queue:
                 if task.task_id == task_id:
                     self._run_post_hooks(task, result)
                     break
-            
+
             self._completed_tasks[task_id] = result
             return result
-        
+
         raise ValueError(f"Task {task_id} not found")
-    
+
     def wait_all(self, timeout: Optional[float] = None) -> List[TaskResult]:
         """
         Wait for all submitted tasks to complete.
-        
+
         Args:
             timeout: Maximum time to wait in seconds
-            
+
         Returns:
             List of TaskResults
         """
         results = []
-        
+
         if isinstance(self._executor, LocalExecutor):
             results = self._executor.wait_all(timeout)
-            
+
             # Run post-hooks for all tasks
             for result in results:
                 for task in self._task_queue:
@@ -384,16 +391,16 @@ class Scheduler:
                         self._run_post_hooks(task, result)
                         self._completed_tasks[task.task_id] = result
                         break
-        
+
         return results
-    
+
     def submit_batch(self, tasks: List[Task]) -> List[str]:
         """
         Submit multiple tasks for parallel execution.
-        
+
         Args:
             tasks: List of tasks to submit
-            
+
         Returns:
             List of task IDs
         """
@@ -402,39 +409,42 @@ class Scheduler:
             task_id = self.submit(task)
             task_ids.append(task_id)
         return task_ids
-    
+
     def execute_batch(self, tasks: List[Task]) -> List[TaskResult]:
         """
         Execute multiple tasks in parallel and wait for all results.
-        
+
         This is the recommended way to run multiple tasks in parallel.
         Uses the executor's ProcessPoolExecutor for parallel execution.
-        
+
         Args:
             tasks: List of tasks to execute
-            
+
         Returns:
             List of TaskResults in the same order as input tasks
         """
         if not self._is_initialized:
             raise RuntimeError("Scheduler is not initialized. Call initialize() first.")
-        
+
         if not tasks:
             return []
-        
+
         # Submit all tasks
         logger.info(f"Submitting {len(tasks)} tasks for parallel execution")
         task_ids = self.submit_batch(tasks)
-        
+
         # Wait for all to complete
         results = self.wait_all()
-        
+
         # Sort results to match input order
         result_map = {r.task_id: r for r in results}
-        ordered_results = [result_map.get(tid) for tid in task_ids]
-        
+        missing = [tid for tid in task_ids if tid not in result_map]
+        if missing:
+            raise RuntimeError(f"Missing results for task IDs: {missing}")
+        ordered_results = [result_map[tid] for tid in task_ids]
+
         return ordered_results
-    
+
     def run_analyze_batch(
         self,
         kernel_configs_list: List[List[KernelEvalConfig]],
@@ -448,16 +458,16 @@ class Scheduler:
     ) -> List[TaskResult]:
         """
         Run multiple analyze tasks in parallel at Scheduler level.
-        
+
         Each item in kernel_configs_list becomes a separate Task that runs in parallel.
-        
+
         Args:
             kernel_configs_list: List of kernel config lists (each becomes a Task)
             Other args same as run_analyze
-            
+
         Returns:
             List of TaskResults
-            
+
         Example:
             # Run 4 analyze tasks in parallel
             results = scheduler.run_analyze_batch([
@@ -481,9 +491,9 @@ class Scheduler:
                 ncu_config=ncu_config,
             )
             tasks.append(task)
-        
+
         return self.execute_batch(tasks)
-    
+
     def run_compare_batch(
         self,
         kernel_configs_list: List[List[KernelEvalConfig]],
@@ -498,16 +508,16 @@ class Scheduler:
     ) -> List[TaskResult]:
         """
         Run multiple compare tasks in parallel at Scheduler level.
-        
+
         Each item in kernel_configs_list becomes a separate Task that runs in parallel.
-        
+
         Args:
             kernel_configs_list: List of kernel config lists (each becomes a Compare Task)
             Other args same as run_compare
-            
+
         Returns:
             List of TaskResults
-            
+
         Example:
             # Run 2 compare tasks in parallel
             results = scheduler.run_compare_batch([
@@ -530,57 +540,59 @@ class Scheduler:
                 ncu_config=ncu_config,
             )
             tasks.append(task)
-        
+
         return self.execute_batch(tasks)
-    
+
     def get_task_status(self, task_id: str) -> Optional[TaskStatus]:
         """
         Get the status of a task.
-        
+
         Args:
             task_id: Task ID
-            
+
         Returns:
             Task status or None if not found
         """
         # Check completed tasks
         if task_id in self._completed_tasks:
             return self._completed_tasks[task_id].status
-        
+
         # Check executor
         if self._executor:
             return self._executor.get_task_status(task_id)
-        
+
         # Check queue
         for task in self._task_queue:
             if task.task_id == task_id:
                 return task.status
-        
+
         return None
-    
+
     def get_pending_tasks(self) -> List[Task]:
         """
         Get list of pending tasks.
-        
+
         Returns:
             List of pending tasks
         """
         return [t for t in self._task_queue if t.status == TaskStatus.PENDING]
-    
+
     def get_completed_results(self) -> Dict[str, TaskResult]:
         """
         Get all completed task results.
-        
+
         Returns:
             Dictionary mapping task IDs to results
         """
         return self._completed_tasks.copy()
-    
+
     def clear_tasks(self) -> None:
         """Clear all pending tasks from queue."""
-        self._task_queue = [t for t in self._task_queue if t.status == TaskStatus.RUNNING]
+        self._task_queue = [
+            t for t in self._task_queue if t.status == TaskStatus.RUNNING
+        ]
         logger.info("Cleared pending tasks")
-    
+
     def _run_pre_hooks(self, task: Task) -> None:
         """Run pre-execution hooks."""
         for hook in self.config.pre_hooks:
@@ -588,7 +600,7 @@ class Scheduler:
                 hook(task)
             except Exception as e:
                 logger.warning(f"Pre-hook failed: {e}")
-    
+
     def _run_post_hooks(self, task: Task, result: TaskResult) -> None:
         """Run post-execution hooks."""
         for hook in self.config.post_hooks:
@@ -596,17 +608,17 @@ class Scheduler:
                 hook(task, result)
             except Exception as e:
                 logger.warning(f"Post-hook failed: {e}")
-    
+
     def is_initialized(self) -> bool:
         """Check if scheduler is initialized."""
         return self._is_initialized
-    
+
     def shutdown(self) -> None:
         """Shutdown the scheduler and cleanup resources."""
         if self._executor:
             self._executor.stop()
             self._executor = None
-        
+
         self._task_queue.clear()
         self._completed_tasks.clear()
         self._is_initialized = False

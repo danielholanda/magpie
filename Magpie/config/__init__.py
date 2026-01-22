@@ -53,4 +53,3 @@ __all__ = [
     "ROCPROF_KEY_METRICS",
     "DEFAULT_ROCPROF_METRIC_BLOCKS",
 ]
-

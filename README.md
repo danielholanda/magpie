@@ -6,21 +6,27 @@ A lightweight, general-purpose framework for evaluating GPU kernel correctness a
 
 - **Three Evaluation Modes**: Analyze, Compare, Benchmark (WIP)
 - **Heterogeneous Hardware**: AMD (HIP) and NVIDIA (CUDA) GPUs
-- **Execution Environments**: Local and Sandbox modes
+- **Execution Environments**: Local and Container modes
 - **Hardware Control**: Power and frequency management
 - **MCP Server**: Model Context Protocol integration for AI agents
 - **Structured Reports**: JSON output for pipeline integration
 
+## Requirements
+
+- Python 3.10+
+- AMD ROCm (HIP) or NVIDIA CUDA toolchain (for kernel compilation/profiling)
+- `rocprof-compute` (AMD) or `ncu` (NVIDIA) if you enable performance profiling
+
 ## Quick Start
 
 ```bash
-# Install
+# Install dependencies
 make install
 
-# Analyze a kernel
-python -m Magpie analyze -k Magpie/kernel_config.yaml
+# Analyze a kernel using a config file
+python -m Magpie analyze --kernel-config Magpie/kernel_config.yaml.example
 
-# Compare kernels
+# Compare kernels directly
 python -m Magpie compare kernel_v1.hip kernel_v2.hip
 
 # Run MCP server
@@ -67,6 +73,14 @@ Available tools:
 - `hardware_spec` - Query GPU hardware specifications
 - `configure_gpu` - Configure GPU power and frequency
 
+## Development
+
+```bash
+make install-dev
+make lint
+make format
+```
+
 ## Project Structure
 
 ```
@@ -85,9 +99,6 @@ Available tools:
     ├── config/               # Configuration classes
     ├── core/                # Core engine components
     ├── eval/                # Evaluation pipeline
-    │   ├── compiling.py     # Kernel compilation
-    │   ├── correctness.py   # Correctness verification
-    │   └── performance.py   # Performance profiling
     ├── modes/               # Evaluation modes
     │   ├── analyze_eval/    # Single kernel analysis
     │   └── compare_eval/    # Multi-kernel comparison
@@ -104,10 +115,10 @@ Available tools:
 ```
 Compiling → Correctness → Performance
     ↓            ↓             ↓
-  hipcc      testcase     rocprof-compute / ncu
+  hipcc/nvcc      testcase     rocprof-compute / ncu
 ```
 
 
 ## License
 
-MIT
+MIT License. See `LICENSE`.

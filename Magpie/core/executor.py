@@ -16,14 +16,13 @@ import logging
 import subprocess
 import time
 from abc import ABC, abstractmethod
-from concurrent.futures import ProcessPoolExecutor, Future, as_completed
+from concurrent.futures import ProcessPoolExecutor, Future
 from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .task import Task, TaskResult, TaskStatus, ModeType
-from ..config import KernelEvalConfig
+from ..config import KernelEvalConfig, KernelType
 from ..utils.gpu import get_gpu_count
 
 logger = logging.getLogger(__name__)
@@ -31,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 class ExecutorType(Enum):
     """Type of executor."""
+
     LOCAL = "local"
     CONTAINER = "container"
     # Future: DISTRIBUTED = "distributed"
@@ -40,7 +40,7 @@ class ExecutorType(Enum):
 class ExecutorConfig:
     """
     Configuration for executors.
-    
+
     Attributes:
         executor_type: Type of executor
         max_workers: Maximum number of concurrent workers
@@ -48,12 +48,13 @@ class ExecutorConfig:
         docker_image: Docker image for container executor
         timeout_seconds: Default timeout for task execution
     """
+
     executor_type: ExecutorType = ExecutorType.LOCAL
     max_workers: int = 1
     gpu_devices: List[int] = field(default_factory=lambda: [0])
     docker_image: Optional[str] = None
     timeout_seconds: float = 300.0
-    
+
     def __post_init__(self):
         if isinstance(self.executor_type, str):
             self.executor_type = ExecutorType(self.executor_type)
@@ -62,17 +63,17 @@ class ExecutorConfig:
 class BaseExecutor(ABC):
     """
     Abstract base class for task executors.
-    
+
     Executors are responsible for:
     - Executing tasks (running evaluation modes)
     - Managing worker processes
     - Handling task lifecycle
     """
-    
+
     def __init__(self, config: ExecutorConfig):
         """
         Initialize the executor.
-        
+
         Args:
             config: Executor configuration
         """
@@ -80,62 +81,62 @@ class BaseExecutor(ABC):
         self._is_running = False
         self._pending_tasks: Dict[str, Task] = {}
         self._futures: Dict[str, Future] = {}
-        
+
     @abstractmethod
     def start(self) -> bool:
         """
         Start the executor.
-        
+
         Returns:
             True if started successfully, False otherwise
         """
         pass
-    
+
     @abstractmethod
     def stop(self) -> None:
         """Stop the executor and cleanup resources."""
         pass
-    
+
     @abstractmethod
     def submit(self, task: Task) -> str:
         """
         Submit a task for execution.
-        
+
         Args:
             task: Task to execute
-            
+
         Returns:
             Task ID
         """
         pass
-    
+
     @abstractmethod
     def execute(self, task: Task) -> TaskResult:
         """
         Execute a task synchronously.
-        
+
         Args:
             task: Task to execute
-            
+
         Returns:
             TaskResult with execution results
         """
         pass
-    
+
     def get_task_status(self, task_id: str) -> Optional[TaskStatus]:
         """
         Get the status of a task.
-        
+
         Args:
             task_id: Task ID
-            
+
         Returns:
             Task status or None if not found
         """
         if task_id in self._pending_tasks:
             return self._pending_tasks[task_id].status
         return None
-    
+
     def is_running(self) -> bool:
         """Check if executor is running."""
         return self._is_running
@@ -144,35 +145,35 @@ class BaseExecutor(ABC):
 class LocalExecutor(BaseExecutor):
     """
     Local executor using multiprocessing.
-    
+
     Executes tasks locally using a ProcessPoolExecutor for
     parallel execution of multiple tasks.
     """
-    
+
     def __init__(self, config: ExecutorConfig):
         """
         Initialize the local executor.
-        
+
         Args:
             config: Executor configuration
         """
         super().__init__(config)
         self._pool: Optional[ProcessPoolExecutor] = None
         self._available_gpus: List[int] = []
-        
+
     def start(self) -> bool:
         """
         Start the executor.
-        
+
         Verifies GPU availability and creates the process pool.
-        
+
         Returns:
             True if started successfully, False otherwise
         """
         if self._is_running:
             logger.warning("Executor is already running")
             return True
-        
+
         # Verify GPU availability
         _ = self._check_gpu_availability()
 
@@ -185,7 +186,7 @@ class LocalExecutor(BaseExecutor):
         except Exception as e:
             logger.error(f"Failed to start executor: {e}")
             return False
-    
+
     def stop(self) -> None:
         """Stop the executor and cleanup resources."""
         if self._pool:
@@ -195,47 +196,48 @@ class LocalExecutor(BaseExecutor):
         self._pending_tasks.clear()
         self._futures.clear()
         logger.info("LocalExecutor stopped")
-    
+
     def submit(self, task: Task) -> str:
         """
         Submit a task for asynchronous execution.
-        
+
         Args:
             task: Task to execute
-            
+
         Returns:
             Task ID
         """
         if not self._is_running:
             raise RuntimeError("Executor is not running")
-        
+
         task.status = TaskStatus.RUNNING
         self._pending_tasks[task.task_id] = task
-        
+
         # Submit to process pool
+        assert self._pool is not None
         future = self._pool.submit(_execute_task_worker, task.to_dict())
         self._futures[task.task_id] = future
-        
+
         logger.info(f"Task {task.task_id} submitted")
         return task.task_id
-    
+
     def execute(self, task: Task) -> TaskResult:
         """
         Execute a task synchronously.
-        
+
         Args:
             task: Task to execute
-            
+
         Returns:
             TaskResult with execution results
         """
         start_time = time.time()
         task.status = TaskStatus.RUNNING
-        
+
         try:
             # Execute directly in current process
             result_dict = _execute_task_worker(task.to_dict())
-            
+
             # Reconstruct TaskResult
             result = TaskResult(
                 task_id=result_dict["task_id"],
@@ -245,10 +247,10 @@ class LocalExecutor(BaseExecutor):
                 execution_time=result_dict["execution_time"],
                 metadata=result_dict.get("metadata", {}),
             )
-            
+
             task.status = result.status
             return result
-            
+
         except Exception as e:
             task.status = TaskStatus.FAILED
             return TaskResult(
@@ -257,21 +259,23 @@ class LocalExecutor(BaseExecutor):
                 errors=[str(e)],
                 execution_time=time.time() - start_time,
             )
-    
-    def wait_for_task(self, task_id: str, timeout: Optional[float] = None) -> TaskResult:
+
+    def wait_for_task(
+        self, task_id: str, timeout: Optional[float] = None
+    ) -> TaskResult:
         """
         Wait for a specific task to complete.
-        
+
         Args:
             task_id: Task ID to wait for
             timeout: Maximum time to wait in seconds
-            
+
         Returns:
             TaskResult when task completes
         """
         if task_id not in self._futures:
             raise ValueError(f"Task {task_id} not found")
-        
+
         future = self._futures[task_id]
         try:
             result_dict = future.result(timeout=timeout)
@@ -283,27 +287,27 @@ class LocalExecutor(BaseExecutor):
                 execution_time=result_dict["execution_time"],
                 metadata=result_dict.get("metadata", {}),
             )
-            
+
             # Update task status
             if task_id in self._pending_tasks:
                 self._pending_tasks[task_id].status = result.status
-            
+
             return result
-            
+
         except Exception as e:
             return TaskResult(
                 task_id=task_id,
                 status=TaskStatus.FAILED,
                 errors=[str(e)],
             )
-    
+
     def wait_all(self, timeout: Optional[float] = None) -> List[TaskResult]:
         """
         Wait for all submitted tasks to complete.
-        
+
         Args:
             timeout: Maximum time to wait in seconds
-            
+
         Returns:
             List of TaskResults
         """
@@ -312,163 +316,163 @@ class LocalExecutor(BaseExecutor):
             result = self.wait_for_task(task_id, timeout)
             results.append(result)
         return results
-    
+
     def _check_gpu_availability(self) -> bool:
         """Check GPU availability. Exit with error if no GPU is found."""
         gpu_count = get_gpu_count()
-        
+
         if gpu_count > 0:
             self._available_gpus = list(range(gpu_count))
             logger.info(f"Found {gpu_count} GPU(s)")
             return True
         else:
-            logger.error("No GPU detected. Please ensure GPU drivers (AMD ROCm or NVIDIA CUDA) are installed.")
+            logger.error(
+                "No GPU detected. Please ensure GPU drivers (AMD ROCm or NVIDIA CUDA) are installed."
+            )
             raise RuntimeError("GPU check failed: No GPU detected")
 
 
 class ContainerExecutor(BaseExecutor):
     """
     Container executor using Docker.
-    
+
     Executes tasks inside Docker containers for isolation
     and reproducibility.
     """
-    
+
     def __init__(self, config: ExecutorConfig):
         """
         Initialize the container executor.
-        
+
         Args:
             config: Executor configuration (must include docker_image)
         """
         super().__init__(config)
         if not config.docker_image:
             raise ValueError("docker_image is required for ContainerExecutor")
+        self._docker_image: str = config.docker_image
         self._container_ids: Dict[str, str] = {}
-        
+
     def start(self) -> bool:
         """
         Start the executor.
-        
+
         Verifies Docker availability and pulls the image.
-        
+
         Returns:
             True if started successfully, False otherwise
         """
         if self._is_running:
             logger.warning("Executor is already running")
             return True
-        
+
         # Check Docker availability
         if not self._check_docker_availability():
             logger.error("Docker is not available")
             return False
-        
+
         # Pull the image
         if not self._pull_image():
-            logger.error(f"Failed to pull image: {self.config.docker_image}")
+            logger.error(f"Failed to pull image: {self._docker_image}")
             return False
-        
+
         self._is_running = True
-        logger.info(f"ContainerExecutor started with image: {self.config.docker_image}")
+        logger.info(f"ContainerExecutor started with image: {self._docker_image}")
         return True
-    
+
     def stop(self) -> None:
         """Stop the executor and cleanup containers."""
         # Stop all running containers
         for task_id, container_id in self._container_ids.items():
             try:
                 subprocess.run(
-                    ["docker", "stop", container_id],
-                    capture_output=True,
-                    timeout=30
+                    ["docker", "stop", container_id], capture_output=True, timeout=30
                 )
                 subprocess.run(
-                    ["docker", "rm", container_id],
-                    capture_output=True,
-                    timeout=30
+                    ["docker", "rm", container_id], capture_output=True, timeout=30
                 )
             except Exception as e:
                 logger.warning(f"Failed to stop container {container_id}: {e}")
-        
+
         self._container_ids.clear()
         self._pending_tasks.clear()
         self._is_running = False
         logger.info("ContainerExecutor stopped")
-    
+
     def submit(self, task: Task) -> str:
         """
         Submit a task for execution in a container.
-        
+
         Args:
             task: Task to execute
-            
+
         Returns:
             Task ID
         """
         if not self._is_running:
             raise RuntimeError("Executor is not running")
-        
+
         task.status = TaskStatus.RUNNING
         self._pending_tasks[task.task_id] = task
-        
+
         # Start container in background
         # Note: This is a simplified implementation
         # A real implementation would use docker-py or similar
         logger.info(f"Task {task.task_id} submitted to container")
         return task.task_id
-    
+
     def execute(self, task: Task) -> TaskResult:
         """
         Execute a task synchronously in a container.
-        
+
         Args:
             task: Task to execute
-            
+
         Returns:
             TaskResult with execution results
         """
         start_time = time.time()
         task.status = TaskStatus.RUNNING
         errors = []
-        
+
         try:
             # Build docker run command
             gpu_args = self._build_gpu_args()
             container_name = f"magpie-{task.task_id}"
-            
+
             # For now, execute locally but in container
             # This is a simplified implementation
             # A full implementation would:
             # 1. Mount necessary files into container
             # 2. Run the evaluation inside container
             # 3. Collect results
-            
+
             cmd = [
-                "docker", "run",
+                "docker",
+                "run",
                 "--rm",
-                "--name", container_name,
+                "--name",
+                container_name,
                 *gpu_args,
-                self.config.docker_image,
-                "python", "-c", f"print('Task {task.task_id} executed')"
+                self._docker_image,
+                "python",
+                "-c",
+                f"print('Task {task.task_id} executed')",
             ]
-            
+
             result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=self.config.timeout_seconds
+                cmd, capture_output=True, text=True, timeout=self.config.timeout_seconds
             )
-            
+
             if result.returncode != 0:
                 errors.append(f"Container execution failed: {result.stderr}")
                 status = TaskStatus.FAILED
             else:
                 status = TaskStatus.COMPLETED
-                
+
             # Note: In a real implementation, we would parse the actual
             # evaluation results from the container output
-            
+
             task.status = status
             return TaskResult(
                 task_id=task.task_id,
@@ -477,7 +481,7 @@ class ContainerExecutor(BaseExecutor):
                 errors=errors,
                 execution_time=time.time() - start_time,
             )
-            
+
         except subprocess.TimeoutExpired:
             task.status = TaskStatus.FAILED
             return TaskResult(
@@ -494,36 +498,32 @@ class ContainerExecutor(BaseExecutor):
                 errors=[str(e)],
                 execution_time=time.time() - start_time,
             )
-    
+
     def _check_docker_availability(self) -> bool:
         """Check if Docker is available."""
         try:
             result = subprocess.run(
-                ["docker", "version"],
-                capture_output=True,
-                timeout=10
+                ["docker", "version"], capture_output=True, timeout=10
             )
             return result.returncode == 0
         except (FileNotFoundError, subprocess.TimeoutExpired):
             return False
-    
+
     def _pull_image(self) -> bool:
         """Pull the Docker image."""
         try:
             result = subprocess.run(
-                ["docker", "pull", self.config.docker_image],
-                capture_output=True,
-                timeout=300
+                ["docker", "pull", self._docker_image], capture_output=True, timeout=300
             )
             return result.returncode == 0
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             return False
-    
+
     def _build_gpu_args(self) -> List[str]:
         """Build GPU arguments for docker run."""
         if not self.config.gpu_devices:
             return []
-        
+
         # Use NVIDIA Container Toolkit
         gpu_ids = ",".join(str(g) for g in self.config.gpu_devices)
         return ["--gpus", f'"device={gpu_ids}"']
@@ -532,10 +532,10 @@ class ContainerExecutor(BaseExecutor):
 def create_executor(config: ExecutorConfig) -> BaseExecutor:
     """
     Factory function to create an executor.
-    
+
     Args:
         config: Executor configuration
-        
+
     Returns:
         Appropriate executor instance
     """
@@ -550,27 +550,26 @@ def create_executor(config: ExecutorConfig) -> BaseExecutor:
 def _execute_task_worker(task_dict: Dict[str, Any]) -> Dict[str, Any]:
     """
     Worker function for executing tasks in separate processes.
-    
+
     This function is pickled and sent to worker processes.
-    
+
     Args:
         task_dict: Serialized task data
-        
+
     Returns:
         Serialized TaskResult
     """
     import time
-    from .task import Task, TaskResult, TaskStatus, ModeType, ModeConfig
-    from ..config import KernelEvalConfig
+    from .task import TaskResult, TaskStatus
     from ..modes import AnalyzeMode, CompareMode
     from ..modes.analyze_eval.analyzer import AnalyzeConfig
     from ..modes.compare_eval.comparator import CompareConfig
-    
+
     start_time = time.time()
     task_id = task_dict["task_id"]
     errors = []
-    results = None
-    
+    results: Any = None
+
     try:
         # Reconstruct kernel configs
         kernel_configs = []
@@ -583,17 +582,17 @@ def _execute_task_worker(task_dict: Dict[str, Any]) -> Dict[str, Any]:
                 # Skip invalid config data
                 logger.warning(f"Skipping invalid kernel config: {type(cfg_data)}")
                 continue
-        
+
         # Get mode config
         mode_cfg = task_dict["mode_config"]
         mode_type = ModeType(mode_cfg["mode_type"])
-        
+
         if mode_type == ModeType.ANALYZE:
             # Get kernel type from first config
-            kernel_type = None
-            if kernel_configs:
-                kernel_type = kernel_configs[0].kernel_type
-            
+            kernel_type = (
+                kernel_configs[0].kernel_type if kernel_configs else KernelType.HIP
+            )
+
             # Create analyzer
             analyze_config = AnalyzeConfig(
                 kernel_type=kernel_type,
@@ -606,13 +605,14 @@ def _execute_task_worker(task_dict: Dict[str, Any]) -> Dict[str, Any]:
                 gpu_arch=mode_cfg.get("gpu_arch", "gfx942"),
             )
             analyzer = AnalyzeMode(analyze_config)
-            
+
             # Execute analysis
-            results = []
+            analysis_results: List[Any] = []
             for kernel_cfg in kernel_configs:
                 result = analyzer.analyze(kernel_cfg)
-                results.append(result)
-                
+                analysis_results.append(result)
+            results = analysis_results
+
         elif mode_type == ModeType.COMPARE:
             # Create comparator
             compare_config = CompareConfig(
@@ -626,25 +626,25 @@ def _execute_task_worker(task_dict: Dict[str, Any]) -> Dict[str, Any]:
                 gpu_arch=mode_cfg.get("gpu_arch", "gfx942"),
             )
             comparator = CompareMode(compare_config)
-            
+
             # Execute comparison
             results = comparator.compare(kernel_configs)
-        
+
         status = TaskStatus.COMPLETED
-        
+
     except Exception as e:
         errors.append(str(e))
         status = TaskStatus.FAILED
         logger.exception(f"Task {task_id} failed with error: {e}")
-    
+
     execution_time = time.time() - start_time
-    
+
     # Return serializable result
-    result = TaskResult(
+    task_result = TaskResult(
         task_id=task_id,
         status=status,
         results=results,
         errors=errors,
         execution_time=execution_time,
     )
-    return result.to_dict()
+    return task_result.to_dict()

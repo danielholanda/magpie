@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .pipeline import KernelType
@@ -20,9 +20,10 @@ if TYPE_CHECKING:
 
 class PerfBackend(Enum):
     """Performance profiling backend."""
-    ROCPROF_COMPUTE = auto()   # rocprof-compute for HIP/AMD GPUs
-    NCU = auto()               # NVIDIA Nsight Compute for CUDA
-    NONE = auto()              # No profiling
+
+    ROCPROF_COMPUTE = auto()  # rocprof-compute for HIP/AMD GPUs
+    NCU = auto()  # NVIDIA Nsight Compute for CUDA
+    NONE = auto()  # No profiling
 
 
 # Default metric blocks for fast profiling on gfx942 (MI300 series)
@@ -82,13 +83,13 @@ ROCPROF_KEY_METRICS = {
 class RocprofComputeConfig:
     """
     Configuration for rocprof-compute profiler.
-    
+
     rocprof-compute is a two-stage profiler:
     1. Profile stage: Collect hardware counters
        `rocprof-compute profile -b <blocks> -n <name> -o <workload_dir> -- <command>`
     2. Analyze stage: Process data and generate metrics
        `rocprof-compute analyze -b <blocks> <workload_dir>`
-    
+
     Attributes:
         workload_dir: Base directory to save profiling workloads
         profile_args: Additional arguments for 'rocprof-compute profile'
@@ -101,87 +102,96 @@ class RocprofComputeConfig:
         output_format: Output format for analyze (csv, json, etc.)
         target_gpu: Target GPU architecture (e.g., "gfx942", auto-detected if None)
     """
+
     workload_dir: str = "./workloads"
     profile_args: List[str] = field(default_factory=list)
     analyze_args: List[str] = field(default_factory=list)
-    metric_blocks: List[str] = field(default_factory=lambda: DEFAULT_ROCPROF_METRIC_BLOCKS.copy())
+    metric_blocks: List[str] = field(
+        default_factory=lambda: DEFAULT_ROCPROF_METRIC_BLOCKS.copy()
+    )
     kernel_filter: Optional[str] = None
     dispatch_filter: Optional[List[int]] = None
     no_roof: bool = True
     output_format: str = "csv"
     target_gpu: Optional[str] = None
-    
-    def get_profile_args(self, workload_name: str, output_dir: Optional[str] = None) -> List[str]:
+
+    def get_profile_args(
+        self, workload_name: str, output_dir: Optional[str] = None
+    ) -> List[str]:
         """
         Build profile command arguments.
-        
+
         Args:
             workload_name: Name for this profiling workload
             output_dir: Override output directory (optional)
-        
+
         Returns:
             List of command line arguments
         """
         args = []
-        
+
         # Add workload name (required)
         args.extend(["-n", workload_name])
-        
+
         # Add output path (rocprof-compute uses -p for path)
         out_dir = output_dir or self.workload_dir
         args.extend(["-p", out_dir])
-        
+
         # Add metric block filters
         if self.metric_blocks:
             args.extend(["-b"] + self.metric_blocks)
-        
+
         # Add kernel filter
         if self.kernel_filter:
             args.extend(["-k", self.kernel_filter])
-        
+
         # Add dispatch filter
         if self.dispatch_filter:
             args.extend(["-d"] + [str(d) for d in self.dispatch_filter])
-        
+
         # Skip roofline if requested
         if self.no_roof:
             args.append("--no-roof")
-        
+
         # Add custom args
         args.extend(self.profile_args)
-        
+
         return args
-    
-    def get_analyze_args(self, workload_path: str, output_dir: Optional[str] = None) -> List[str]:
+
+    def get_analyze_args(
+        self, workload_path: str, output_dir: Optional[str] = None
+    ) -> List[str]:
         """
         Build analyze command arguments.
-        
+
         Args:
             workload_path: Path to the workload directory to analyze
             output_dir: Directory to save analysis dataframe CSV files (optional)
-        
+
         Returns:
             List of command line arguments
         """
         args = []
-        
+
         # Add workload path (rocprof-compute uses -p for path)
         args.extend(["-p", workload_path])
-        
+
         # Add metric block filters for analysis
         if self.metric_blocks:
             args.extend(["-b"] + self.metric_blocks)
-        
+
         # Save dataframes to CSV if output format is csv
         if output_dir and self.output_format == "csv":
             args.extend(["--save-dfs", output_dir])
-        
+
         # Add custom args
         args.extend(self.analyze_args)
-        
+
         return args
-    
-    def get_workload_path(self, workload_name: str, base_dir: Optional[str] = None) -> Path:
+
+    def get_workload_path(
+        self, workload_name: str, base_dir: Optional[str] = None
+    ) -> Path:
         """Get the full path for a workload directory."""
         base = Path(base_dir or self.workload_dir)
         return base / workload_name
@@ -191,12 +201,13 @@ class RocprofComputeConfig:
 class NcuConfig:
     """
     Configuration for NVIDIA Nsight Compute (ncu) profiler.
-    
+
     Attributes:
         args: Additional arguments for ncu
         metrics: Specific metrics to collect
         kernel_filter: Kernel name filter
     """
+
     args: List[str] = field(default_factory=list)
     metrics: List[str] = field(default_factory=list)
     kernel_filter: Optional[str] = None
@@ -206,7 +217,7 @@ class NcuConfig:
 class PerformanceConfig:
     """
     Configuration for performance evaluation.
-    
+
     Attributes:
         enabled: Whether to enable performance evaluation
         backend: Profiling backend (auto-selected based on kernel_type if not specified)
@@ -216,6 +227,7 @@ class PerformanceConfig:
         rocprof_config: Configuration for rocprof-compute
         ncu_config: Configuration for ncu
     """
+
     enabled: bool = True
     backend: Optional[PerfBackend] = None
     kernel_type: Optional["KernelType"] = None
@@ -228,13 +240,14 @@ class PerformanceConfig:
         # Auto-select backend based on kernel type if not specified
         if self.backend is None and self.kernel_type is not None:
             from .pipeline import KernelType
+
             if self.kernel_type == KernelType.HIP:
                 self.backend = PerfBackend.ROCPROF_COMPUTE
             elif self.kernel_type == KernelType.CUDA:
                 self.backend = PerfBackend.NCU
             else:
                 self.backend = PerfBackend.NONE
-        
+
         # Initialize default configs
         if self.rocprof_config is None:
             self.rocprof_config = RocprofComputeConfig()

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 ###############################################################################
 # Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
 #
@@ -10,13 +9,13 @@ Magpie: GPU Kernel Evaluation Framework
 Usage:
     # Run from project root
     python -m Magpie analyze kernel.hip -t "./test.sh"
-    
+
     # Analyze with kernel config file
     python -m Magpie analyze --kernel-config my_kernel.yaml
-    
+
     # Compare kernels
     python -m Magpie compare kernel1.hip kernel2.hip
-    
+
     # Compare with kernel config file
     python -m Magpie compare --kernel-config kernels.yaml
 """
@@ -25,15 +24,14 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from .config import KernelType, KernelEvalConfig
 from .core import Scheduler, SchedulerConfig, EnvironmentType
-from .core.task import ModeType, TaskResult, TaskStatus
 from .eval import EvaluationState, BaseKind
-from .utils import detect_gpu, get_gpu_info
+from .utils import get_gpu_info
 
 logger = logging.getLogger(__name__)
 
@@ -51,10 +49,9 @@ def setup_logging(config: Dict[str, Any], verbose: bool = False) -> None:
     log_cfg = config.get("logging", {})
     level_str = "DEBUG" if verbose else log_cfg.get("level", "INFO")
     level = getattr(logging, level_str.upper(), logging.INFO)
-    
+
     logging.basicConfig(
-        level=level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        level=level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
 
 
@@ -73,37 +70,37 @@ def parse_kernel_type(type_str: str) -> KernelType:
 def load_kernel_config(kernel_config_path: Path) -> List[KernelEvalConfig]:
     """
     Load kernel configuration from YAML file.
-    
+
     Returns:
         List of KernelEvalConfig objects
     """
     data = load_yaml(kernel_config_path)
     configs = []
-    
+
     # Single kernel
     if "kernel" in data:
         cfg = _parse_kernel_entry(data["kernel"])
         if cfg:
             configs.append(cfg)
-    
+
     # Multiple kernels
     if "kernels" in data:
         for entry in data["kernels"]:
             cfg = _parse_kernel_entry(entry)
             if cfg:
                 configs.append(cfg)
-    
+
     return configs
 
 
 def _parse_command_list(cmd_entry) -> Optional[List]:
     """
     Parse a command entry which can be:
-    
+
     Single command formats:
     - A string: "make build" -> ["make", "build"]
     - A list of strings: ["make", "build"] -> ["make", "build"]
-    
+
     Multiple commands format (list of lists):
     - [["make", "clean"], ["make", "build"]] -> [["make", "clean"], ["make", "build"]]
     - In YAML:
@@ -118,7 +115,7 @@ def _parse_command_list(cmd_entry) -> Optional[List]:
           - - cmake
             - --build
             - build
-    
+
     Returns:
         - Single command as List[str]
         - Multiple commands as List[List[str]]
@@ -126,25 +123,25 @@ def _parse_command_list(cmd_entry) -> Optional[List]:
     """
     if cmd_entry is None:
         return None
-    
+
     if isinstance(cmd_entry, str):
         # Single string command: "make build" -> ["make", "build"]
         return cmd_entry.split()
-    
+
     if isinstance(cmd_entry, list):
         if len(cmd_entry) == 0:
             return None
-        
+
         # Check if it's a list of lists (multiple commands)
         # e.g., [["make", "clean"], ["make", "build"]]
         if isinstance(cmd_entry[0], list):
             return cmd_entry
-        
+
         # It's a list of strings - treat as single command
         # e.g., ["make", "build"]
         if all(isinstance(item, str) for item in cmd_entry):
             return cmd_entry
-    
+
     return None
 
 
@@ -152,18 +149,18 @@ def _parse_kernel_entry(entry: Dict[str, Any]) -> Optional[KernelEvalConfig]:
     """Parse a single kernel entry from config."""
     if not entry:
         return None
-    
+
     kernel_type = parse_kernel_type(entry.get("type", "hip"))
-    
+
     # Parse testcase command(s)
     testcase_cmd = _parse_command_list(entry.get("testcase_command"))
-    
+
     # Parse compile command(s)
     compile_cmd = _parse_command_list(entry.get("compile_command"))
-    
+
     # Parse prof command(s)
     prof_cmd = _parse_command_list(entry.get("prof_command"))
-    
+
     return KernelEvalConfig(
         kernel_id=entry.get("id", "kernel"),
         kernel_type=kernel_type,
@@ -181,10 +178,10 @@ def _parse_kernel_entry(entry: Dict[str, Any]) -> Optional[KernelEvalConfig]:
 def _get_compiling_config(config: Dict[str, Any]) -> Dict[str, Any]:
     """
     Get compiling configuration from framework config.
-    
+
     Args:
         config: Framework config dict
-        
+
     Returns:
         Dict with enable_default_compile
     """
@@ -194,35 +191,39 @@ def _get_compiling_config(config: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _get_performance_config(config: Dict[str, Any], kernel_type: KernelType) -> Dict[str, Any]:
+def _get_performance_config(
+    config: Dict[str, Any], kernel_type: KernelType
+) -> Dict[str, Any]:
     """
     Get performance configuration from framework config.
-    
+
     Args:
         config: Framework config dict
         kernel_type: Kernel type to determine which profiler args to use
-        
+
     Returns:
         Dict with timeout_seconds, profiler_args, and rocprof_config/ncu_config
     """
     perf_cfg = config.get("performance", {})
-    
+
     # Get timeout
     timeout = perf_cfg.get("timeout_seconds", 300.0)
-    
+
     # Get profiler args and config based on kernel type
     profiler_args = []
     rocprof_config = {}
     ncu_config = {}
-    
+
     if kernel_type == KernelType.HIP:
         rocprof_cfg = perf_cfg.get("rocprof_compute", {})
         profiler_args = rocprof_cfg.get("profile_args", rocprof_cfg.get("args", []))
-        
+
         # Build full rocprof config
         rocprof_config = {
             "workload_dir": rocprof_cfg.get("workload_dir", "./workloads"),
-            "metric_blocks": rocprof_cfg.get("metric_blocks", ["1", "2", "5", "10", "11", "12", "14", "16", "17"]),
+            "metric_blocks": rocprof_cfg.get(
+                "metric_blocks", ["1", "2", "5", "10", "11", "12", "14", "16", "17"]
+            ),
             "no_roof": rocprof_cfg.get("no_roof", True),
             "output_format": rocprof_cfg.get("output_format", "csv"),
             "profile_args": rocprof_cfg.get("profile_args", []),
@@ -235,7 +236,7 @@ def _get_performance_config(config: Dict[str, Any], kernel_type: KernelType) -> 
             "args": ncu_cfg.get("args", []),
             "metrics": ncu_cfg.get("metrics", []),
         }
-    
+
     return {
         "timeout_seconds": timeout,
         "profiler_args": profiler_args,
@@ -247,29 +248,31 @@ def _get_performance_config(config: Dict[str, Any], kernel_type: KernelType) -> 
 def _get_scheduler_config(config: Dict[str, Any], args) -> SchedulerConfig:
     """
     Get scheduler configuration from framework config and CLI args.
-    
+
     Args:
         config: Framework config dict
         args: CLI arguments
-        
+
     Returns:
         SchedulerConfig
     """
     sched_cfg = config.get("scheduler", {})
-    
+
     # Determine environment type
-    env_type_str = getattr(args, "environment", None) or sched_cfg.get("environment", "local")
+    env_type_str = getattr(args, "environment", None) or sched_cfg.get(
+        "environment", "local"
+    )
     env_type = EnvironmentType(env_type_str.lower())
-    
+
     # Get worker count
     max_workers = getattr(args, "workers", None) or sched_cfg.get("max_workers", 1)
-    
+
     # Get GPU devices
     gpu_devices = sched_cfg.get("gpu_devices", [0])
-    
+
     # Get docker image
     docker_image = getattr(args, "docker_image", None) or sched_cfg.get("docker_image")
-    
+
     return SchedulerConfig(
         environment_type=env_type,
         max_workers=max_workers,
@@ -282,7 +285,7 @@ def run_analyze(args, config: Dict[str, Any]) -> int:
     """Run analyze mode."""
     # Load kernel configs
     kernel_configs = []
-    
+
     if args.kernel_config:
         # Load from kernel config file
         kernel_configs = load_kernel_config(args.kernel_config)
@@ -295,41 +298,45 @@ def run_analyze(args, config: Dict[str, Any]) -> int:
             logger.error("Analyze mode requires --testcase")
             print("Error: --testcase is required for analyze mode")
             return 1
-        
+
         kernel_type = parse_kernel_type(args.type)
-        
+
         for path in args.kernels:
             if not path.exists():
                 logger.error(f"Kernel not found: {path}")
                 continue
-            
-            kernel_configs.append(KernelEvalConfig(
-                kernel_id=path.stem,
-                kernel_type=kernel_type,
-                source_file_path=[str(path)],
-                testcase_command=args.testcase.split(),
-                compiling_command=args.compile_cmd.split() if args.compile_cmd else None,
-                working_dir=str(path.parent),
-            ))
+
+            kernel_configs.append(
+                KernelEvalConfig(
+                    kernel_id=path.stem,
+                    kernel_type=kernel_type,
+                    source_file_path=[str(path)],
+                    testcase_command=args.testcase.split(),
+                    compiling_command=args.compile_cmd.split()
+                    if args.compile_cmd
+                    else None,
+                    working_dir=str(path.parent),
+                )
+            )
     else:
         logger.error("No kernels specified")
         return 1
-    
+
     # Get kernel type for configuration
     kernel_type = kernel_configs[0].kernel_type if kernel_configs else KernelType.HIP
-    
+
     # Get config from framework config
     compile_settings = _get_compiling_config(config)
     perf_settings = _get_performance_config(config, kernel_type)
-    
+
     # Create scheduler
     scheduler_config = _get_scheduler_config(config, args)
     scheduler = Scheduler(scheduler_config)
-    
+
     if not scheduler.initialize():
         logger.error("Failed to initialize scheduler")
         return 1
-    
+
     try:
         # Run analysis via scheduler
         result = scheduler.run_analyze(
@@ -341,7 +348,7 @@ def run_analyze(args, config: Dict[str, Any]) -> int:
             rocprof_config=perf_settings["rocprof_config"],
             ncu_config=perf_settings["ncu_config"],
         )
-        
+
         # Print and save results
         if result.success and result.results:
             for kernel_cfg, state in zip(kernel_configs, result.results):
@@ -349,12 +356,12 @@ def run_analyze(args, config: Dict[str, Any]) -> int:
                 if isinstance(state, dict):
                     state = _dict_to_eval_state(state)
                 _print_result(kernel_cfg, state)
-            
+
             _save_results(result.results, args.output_dir, "analyze")
         else:
             logger.error(f"Analysis failed: {result.errors}")
             return 1
-        
+
         # Count failures
         failed = 0
         for state in result.results:
@@ -362,12 +369,12 @@ def run_analyze(args, config: Dict[str, Any]) -> int:
                 correctness = state.get("correctness_state", "UNKNOWN")
                 if correctness != "SUCCESS":
                     failed += 1
-            elif hasattr(state, 'correctness_state'):
+            elif hasattr(state, "correctness_state"):
                 if state.correctness_state != BaseKind.SUCCESS:
                     failed += 1
-        
+
         return 1 if failed > 0 else 0
-        
+
     finally:
         scheduler.shutdown()
 
@@ -376,44 +383,46 @@ def run_compare(args, config: Dict[str, Any]) -> int:
     """Run compare mode."""
     # Load kernel configs
     kernel_configs = []
-    
+
     if args.kernel_config:
         kernel_configs = load_kernel_config(args.kernel_config)
     elif args.kernels:
         kernel_type = parse_kernel_type(args.type)
-        
+
         for i, path in enumerate(args.kernels):
             if not path.exists():
                 logger.error(f"Kernel not found: {path}")
                 return 1
-            
-            kernel_configs.append(KernelEvalConfig(
-                kernel_id=f"kernel_{i}_{path.stem}",
-                kernel_type=kernel_type,
-                source_file_path=[str(path)],
-                testcase_command=args.testcase.split() if args.testcase else None,
-                working_dir=str(path.parent),
-            ))
-    
+
+            kernel_configs.append(
+                KernelEvalConfig(
+                    kernel_id=f"kernel_{i}_{path.stem}",
+                    kernel_type=kernel_type,
+                    source_file_path=[str(path)],
+                    testcase_command=args.testcase.split() if args.testcase else None,
+                    working_dir=str(path.parent),
+                )
+            )
+
     if len(kernel_configs) < 2:
         logger.error("Compare mode requires at least 2 kernels")
         return 1
-    
+
     # Get kernel type for configuration
     kernel_type = kernel_configs[0].kernel_type if kernel_configs else KernelType.HIP
-    
+
     # Get config from framework config
     compile_settings = _get_compiling_config(config)
     perf_settings = _get_performance_config(config, kernel_type)
-    
+
     # Create scheduler
     scheduler_config = _get_scheduler_config(config, args)
     scheduler = Scheduler(scheduler_config)
-    
+
     if not scheduler.initialize():
         logger.error("Failed to initialize scheduler")
         return 1
-    
+
     try:
         # Run comparison via scheduler
         result = scheduler.run_compare(
@@ -426,30 +435,30 @@ def run_compare(args, config: Dict[str, Any]) -> int:
             rocprof_config=perf_settings["rocprof_config"],
             ncu_config=perf_settings["ncu_config"],
         )
-        
+
         # Print results
         if result.success and result.results:
             comparison = result.results
-            
-            print(f"\n{'='*60}")
+
+            print(f"\n{'=' * 60}")
             print("COMPARISON RESULTS")
-            print(f"{'='*60}")
-            
+            print(f"{'=' * 60}")
+
             if isinstance(comparison, dict):
                 print(comparison.get("summary", "No summary available"))
-            elif hasattr(comparison, 'summary'):
+            elif hasattr(comparison, "summary"):
                 print(comparison.summary)
-            
-            print(f"{'='*60}\n")
-            
+
+            print(f"{'=' * 60}\n")
+
             # Save results
             _save_comparison(comparison, args.output_dir)
         else:
             logger.error(f"Comparison failed: {result.errors}")
             return 1
-        
+
         return 0
-        
+
     finally:
         scheduler.shutdown()
 
@@ -457,7 +466,7 @@ def run_compare(args, config: Dict[str, Any]) -> int:
 def _dict_to_eval_state(state_dict: Dict[str, Any]) -> EvaluationState:
     """Convert a dictionary back to EvaluationState."""
     state = EvaluationState()
-    
+
     if "compiling_state" in state_dict:
         state.compiling_state = BaseKind[state_dict["compiling_state"]]
     if "correctness_state" in state_dict:
@@ -470,61 +479,61 @@ def _dict_to_eval_state(state_dict: Dict[str, Any]) -> EvaluationState:
         state.errors = state_dict["errors"]
     if "extra" in state_dict:
         state.extra = state_dict["extra"]
-    
+
     return state
 
 
 def _print_result(kernel_cfg: KernelEvalConfig, result: EvaluationState) -> None:
     """Print evaluation result."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Kernel: {kernel_cfg.kernel_id}")
     print(f"Type: {kernel_cfg.kernel_type.name}")
-    
+
     if isinstance(result, dict):
         print(f"Compiling: {result.get('compiling_state', 'UNKNOWN')}")
         print(f"Correctness: {result.get('correctness_state', 'UNKNOWN')}")
         print(f"Performance: {result.get('performance_state', 'UNKNOWN')}")
         print(f"Score: {result.get('score', 0.0):.2f}")
-        errors = result.get('errors', [])
+        errors = result.get("errors", [])
     else:
         print(f"Compiling: {result.compiling_state.name}")
         print(f"Correctness: {result.correctness_state.name}")
         print(f"Performance: {result.performance_state.name}")
         print(f"Score: {result.score:.2f}")
         errors = result.errors
-    
+
     if errors:
         print("Errors:")
         for err in errors:
             print(f"  - {err}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
 
 def _save_results(results: List, output_dir: Path, mode: str) -> None:
     """Save results to file."""
     import json
     from datetime import datetime
-    
+
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_file = output_dir / f"{mode}_results_{timestamp}.json"
-    
-    serialized_results = []
+
+    serialized_results: List[Any] = []
     for r in results:
         if isinstance(r, dict):
             serialized_results.append(r)
-        elif hasattr(r, 'to_dict'):
+        elif hasattr(r, "to_dict"):
             serialized_results.append(r.to_dict())
         else:
             serialized_results.append(str(r))
-    
+
     with open(output_file, "w") as f:
-        json.dump({
-            "mode": mode,
-            "timestamp": timestamp,
-            "results": serialized_results
-        }, f, indent=2)
-    
+        json.dump(
+            {"mode": mode, "timestamp": timestamp, "results": serialized_results},
+            f,
+            indent=2,
+        )
+
     logger.info(f"Results saved to {output_file}")
 
 
@@ -532,33 +541,37 @@ def _save_comparison(comparison: Any, output_dir: Path) -> None:
     """Save comparison to file."""
     import json
     from datetime import datetime
-    
+
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_file = output_dir / f"compare_results_{timestamp}.json"
-    
+
     # Extract comparison data
     if isinstance(comparison, dict):
         comparison_data = comparison
-    elif hasattr(comparison, 'to_dict'):
+    elif hasattr(comparison, "to_dict"):
         comparison_data = comparison.to_dict()
     else:
         comparison_data = {"result": str(comparison)}
-    
+
     # Use same format as analyze: mode, timestamp, results
     with open(output_file, "w") as f:
-        json.dump({
-            "mode": "compare",
-            "timestamp": timestamp,
-            "results": {
-                "kernel_results": comparison_data.get("kernel_results", []),
-                "comparison_metrics": comparison_data.get("comparison_metrics", {}),
-                "winner": comparison_data.get("winner"),
-                "rankings": comparison_data.get("rankings", []),
-                "summary": comparison_data.get("summary", ""),
-            }
-        }, f, indent=2)
-    
+        json.dump(
+            {
+                "mode": "compare",
+                "timestamp": timestamp,
+                "results": {
+                    "kernel_results": comparison_data.get("kernel_results", []),
+                    "comparison_metrics": comparison_data.get("comparison_metrics", {}),
+                    "winner": comparison_data.get("winner"),
+                    "rankings": comparison_data.get("rankings", []),
+                    "summary": comparison_data.get("summary", ""),
+                },
+            },
+            f,
+            indent=2,
+        )
+
     logger.info(f"Comparison saved to {output_file}")
 
 
@@ -567,138 +580,103 @@ def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Magpie: GPU Kernel Evaluation Framework",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__
+        epilog=__doc__,
     )
-    
+
     # Default config: use config.yaml relative to Magpie package
     default_config = Path(__file__).parent / "config.yaml"
-    
+
     parser.add_argument(
-        "--config", "-c",
+        "--config",
+        "-c",
         type=Path,
         default=default_config,
-        help="Framework configuration file"
+        help="Framework configuration file",
+    )
+    parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+    parser.add_argument(
+        "--gpu-info", action="store_true", help="Show detected GPU info and exit"
     )
     parser.add_argument(
-        "--verbose", "-v",
-        action="store_true",
-        help="Verbose output"
-    )
-    parser.add_argument(
-        "--gpu-info",
-        action="store_true",
-        help="Show detected GPU info and exit"
-    )
-    parser.add_argument(
-        "--environment", "-e",
+        "--environment",
+        "-e",
         type=str,
         choices=["local", "container"],
-        help="Execution environment (default: local)"
+        help="Execution environment (default: local)",
     )
     parser.add_argument(
-        "--workers", "-w",
-        type=int,
-        help="Number of concurrent workers"
+        "--workers", "-w", type=int, help="Number of concurrent workers"
     )
     parser.add_argument(
-        "--docker-image",
-        type=str,
-        help="Docker image for container environment"
+        "--docker-image", type=str, help="Docker image for container environment"
     )
-    
+
     subparsers = parser.add_subparsers(dest="mode", help="Evaluation mode")
-    
+
     # Analyze subcommand
     analyze_parser = subparsers.add_parser(
-        "analyze",
-        help="Analyze kernel(s) - requires testcase"
+        "analyze", help="Analyze kernel(s) - requires testcase"
     )
     analyze_parser.add_argument(
-        "kernels",
-        type=Path,
-        nargs="*",
-        help="Kernel file(s) to analyze"
+        "kernels", type=Path, nargs="*", help="Kernel file(s) to analyze"
     )
     analyze_parser.add_argument(
-        "--kernel-config", "-k",
-        type=Path,
-        help="Kernel configuration file"
+        "--kernel-config", "-k", type=Path, help="Kernel configuration file"
     )
-    analyze_parser.add_argument(
-        "--testcase", "-t",
-        type=str,
-        help="Testcase command"
-    )
+    analyze_parser.add_argument("--testcase", "-t", type=str, help="Testcase command")
     analyze_parser.add_argument(
         "--type",
         type=str,
         default="hip",
         choices=["hip", "cuda", "pytorch"],
-        help="Kernel type"
+        help="Kernel type",
     )
     analyze_parser.add_argument(
-        "--compile-cmd",
-        type=str,
-        help="Custom compile command"
+        "--compile-cmd", type=str, help="Custom compile command"
     )
     analyze_parser.add_argument(
-        "--no-perf",
-        action="store_true",
-        help="Skip performance profiling"
+        "--no-perf", action="store_true", help="Skip performance profiling"
     )
     analyze_parser.add_argument(
-        "--output-dir", "-o",
+        "--output-dir",
+        "-o",
         type=Path,
         default=Path("./results"),
-        help="Output directory"
+        help="Output directory",
     )
-    
+
     # Compare subcommand
-    compare_parser = subparsers.add_parser(
-        "compare",
-        help="Compare multiple kernels"
+    compare_parser = subparsers.add_parser("compare", help="Compare multiple kernels")
+    compare_parser.add_argument(
+        "kernels", type=Path, nargs="*", help="Kernel files to compare"
     )
     compare_parser.add_argument(
-        "kernels",
-        type=Path,
-        nargs="*",
-        help="Kernel files to compare"
+        "--kernel-config", "-k", type=Path, help="Kernel configuration file"
     )
     compare_parser.add_argument(
-        "--kernel-config", "-k",
-        type=Path,
-        help="Kernel configuration file"
-    )
-    compare_parser.add_argument(
-        "--testcase", "-t",
-        type=str,
-        help="Testcase command (optional)"
+        "--testcase", "-t", type=str, help="Testcase command (optional)"
     )
     compare_parser.add_argument(
         "--type",
         type=str,
         default="hip",
         choices=["hip", "cuda", "pytorch"],
-        help="Kernel type"
+        help="Kernel type",
     )
     compare_parser.add_argument(
-        "--baseline",
-        type=int,
-        default=0,
-        help="Baseline kernel index"
+        "--baseline", type=int, default=0, help="Baseline kernel index"
     )
     compare_parser.add_argument(
-        "--no-perf",
-        action="store_true",
-        help="Skip performance profiling"
+        "--no-perf", action="store_true", help="Skip performance profiling"
     )
     compare_parser.add_argument(
-        "--output-dir", "-o",
+        "--output-dir",
+        "-o",
         type=Path,
         default=Path("./results"),
-        help="Output directory"
+        help="Output directory",
     )
-    
+
     return parser
 
 
@@ -706,28 +684,28 @@ def main() -> int:
     """Main entry point."""
     parser = create_parser()
     args = parser.parse_args()
-    
+
     # Handle --gpu-info
     if args.gpu_info:
         info = get_gpu_info()
         print("GPU Information:")
         print(f"  Vendor: {info['vendor']}")
         print(f"  Architecture: {info['architecture']}")
-        if info['detected']:
+        if info["detected"]:
             print(f"  Compiler: {info.get('compiler', 'N/A')}")
             print(f"  Profiler: {info.get('profiler', 'N/A')}")
         else:
             print("  (No GPU detected)")
         return 0
-    
+
     if not args.mode:
         parser.print_help()
         return 0
-    
+
     # Load framework config
     config = load_yaml(args.config)
     setup_logging(config, args.verbose)
-    
+
     if args.mode == "analyze":
         return run_analyze(args, config)
     elif args.mode == "compare":

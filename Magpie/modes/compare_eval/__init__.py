@@ -13,4 +13,3 @@ implementations, enabling side-by-side performance and correctness analysis.
 from .comparator import CompareMode
 
 __all__ = ["CompareMode"]
-

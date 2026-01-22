@@ -19,58 +19,59 @@ from .pipeline import KernelType
 class KernelEvalConfig:
     """
     Configuration for evaluating a specific kernel.
-    
+
     Attributes:
         kernel_id: Unique identifier for the kernel
         kernel_type: Type of kernel (pytorch, hip, cuda)
         source_file_path: Path(s) to kernel source file(s)
         working_dir: Working directory for compilation and execution
         env: Environment variables for execution
-        
+
         # Compilation
         compiling_command: Custom compilation command(s) (optional)
             - Can be a single command: ["make", "build"]
             - Or a list of commands executed in order: [["make", "clean"], ["make", "build"]]
-        
+
         # Correctness (for analyze mode)
         testcase_command: Custom testcase command(s) (required for analyze mode)
             - Can be a single command: ["./test.sh"]
             - Or a list of commands executed in order: [["./setup.sh"], ["./test.sh"]]
-        
+
         # Performance profiling
         prof_command: Custom profiling command(s) (optional)
             - If provided, replaces the built-in profiler backend
             - Can be a single command or a list of commands
-        
+
         # Input generation (for compare mode with pytorch)
         get_inputs_func: Name of function to generate inputs
         get_init_inputs_func: Name of function to generate init inputs
-        
+
         # Additional
         input_shapes: Input tensor shapes for evaluation
         dtype: Data type for computation
         extra: Additional kernel-specific parameters
     """
+
     kernel_id: str = ""
     kernel_type: KernelType = KernelType.HIP
     source_file_path: List[str] = field(default_factory=list)
     working_dir: Optional[str] = None
     env: Optional[Dict[str, str]] = None
-    
+
     # Compilation - supports single command or list of commands
     # Single: ["make", "build"] or List: [["make", "clean"], ["make", "build"]]
     compiling_command: Optional[List] = None
-    
+
     # Correctness - supports single command or list of commands
     testcase_command: Optional[List] = None
-    
+
     # Performance profiling - custom command(s) to replace built-in profiler
     prof_command: Optional[List] = None
-    
+
     # Input generation (for KenrelBench)
     get_inputs_func: str = "get_inputs"
     get_init_inputs_func: str = "get_init_inputs"
-    
+
     # Additional
     input_shapes: List[tuple] = field(default_factory=list)
     dtype: str = "float32"
@@ -97,7 +98,7 @@ class KernelEvalConfig:
     def get_compile_commands(self) -> List[List[str]]:
         """
         Get compilation commands as a list of commands.
-        
+
         Returns:
             List of commands, where each command is a list of strings.
         """
@@ -112,7 +113,7 @@ class KernelEvalConfig:
     def get_testcase_commands(self) -> List[List[str]]:
         """
         Get testcase commands as a list of commands.
-        
+
         Returns:
             List of commands, where each command is a list of strings.
         """
@@ -127,7 +128,7 @@ class KernelEvalConfig:
     def get_prof_commands(self) -> List[List[str]]:
         """
         Get profiling commands as a list of commands.
-        
+
         Returns:
             List of commands, where each command is a list of strings.
         """
@@ -143,7 +144,9 @@ class KernelEvalConfig:
         """Convert to dictionary for serialization."""
         return {
             "kernel_id": self.kernel_id,
-            "kernel_type": self.kernel_type.name if hasattr(self.kernel_type, 'name') else str(self.kernel_type),
+            "kernel_type": self.kernel_type.name
+            if hasattr(self.kernel_type, "name")
+            else str(self.kernel_type),
             "source_file_path": self.source_file_path,
             "working_dir": self.working_dir,
             "env": self.env,
@@ -168,7 +171,7 @@ class KernelEvalConfig:
         elif isinstance(kernel_type, int):
             # Fallback: get by value
             kernel_type = KernelType(kernel_type)
-        
+
         return cls(
             kernel_id=data.get("kernel_id", ""),
             kernel_type=kernel_type,
@@ -184,4 +187,3 @@ class KernelEvalConfig:
             dtype=data.get("dtype", "float32"),
             extra=data.get("extra", {}),
         )
-

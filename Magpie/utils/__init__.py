@@ -46,4 +46,3 @@ __all__ = [
     "load_gpu_config_from_dict",
     "get_reset_after_benchmark",
 ]
-

@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, Dict, List, Optional
 
-from ..config import EvalMode, PipelineConfig, KernelEvalConfig
+from ..config import PipelineConfig, KernelEvalConfig
 from .correctness import Correctness, CorrectnessResult
 from .compiling import Compiling, CompilingResult
 from .performance import Performance, PerformanceResult
@@ -24,6 +24,7 @@ from .performance import Performance, PerformanceResult
 
 class BaseKind(Enum):
     """Base status for evaluation stages."""
+
     SUCCESS = auto()
     FAILED = auto()
     SKIPPED = auto()
@@ -34,6 +35,7 @@ class EvaluationState:
     """
     Evaluation state that holds the results of all evaluation stages.
     """
+
     # State of each evaluation step
     compiling_state: BaseKind = BaseKind.SUCCESS
     correctness_state: BaseKind = BaseKind.SUCCESS
@@ -60,39 +62,53 @@ class EvaluationState:
             "errors": self.errors,
             "score": self.score,
             "compiling_result": {
-                "success": self.compiling_result.success if self.compiling_result else False,
-                "errors": self.compiling_result.errors if self.compiling_result else None,
-            } if self.compiling_result else None,
+                "success": self.compiling_result.success
+                if self.compiling_result
+                else False,
+                "errors": self.compiling_result.errors
+                if self.compiling_result
+                else None,
+            }
+            if self.compiling_result
+            else None,
             "correctness_result": {
-                "success": self.correctness_result.success if self.correctness_result else False,
-                "errors": self.correctness_result.errors if self.correctness_result else None,
-            } if self.correctness_result else None,
-            "performance_result": self.performance_result.to_dict() if self.performance_result else None,
+                "success": self.correctness_result.success
+                if self.correctness_result
+                else False,
+                "errors": self.correctness_result.errors
+                if self.correctness_result
+                else None,
+            }
+            if self.correctness_result
+            else None,
+            "performance_result": self.performance_result.to_dict()
+            if self.performance_result
+            else None,
             "extra": self.extra,
         }
-    
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "EvaluationState":
         """
         Reconstruct EvaluationState from dictionary.
-        
+
         Args:
             data: Dictionary representation of EvaluationState
-            
+
         Returns:
             Reconstructed EvaluationState object
         """
         state = cls()
-        
+
         # Restore states
         state.compiling_state = BaseKind[data.get("compiling_state", "SUCCESS")]
         state.correctness_state = BaseKind[data.get("correctness_state", "SUCCESS")]
         state.performance_state = BaseKind[data.get("performance_state", "SUCCESS")]
-        
+
         # Restore errors and score
         state.errors = data.get("errors", [])
         state.score = data.get("score", 0.0)
-        
+
         # Restore compiling result
         compiling_data = data.get("compiling_result")
         if compiling_data:
@@ -100,7 +116,7 @@ class EvaluationState:
                 success=compiling_data.get("success", False),
                 errors=compiling_data.get("errors"),
             )
-        
+
         # Restore correctness result
         correctness_data = data.get("correctness_result")
         if correctness_data:
@@ -108,7 +124,7 @@ class EvaluationState:
                 success=correctness_data.get("success", False),
                 errors=correctness_data.get("errors"),
             )
-        
+
         # Restore performance result
         perf_data = data.get("performance_result")
         if perf_data:
@@ -118,24 +134,24 @@ class EvaluationState:
                 command=perf_data.get("command"),
                 workload_dir=perf_data.get("workload_dir"),
             )
-        
+
         # Restore extra
         state.extra = data.get("extra", {})
-        
+
         return state
 
 
 class Evaluator:
     """
     Main evaluator implementing the evaluation pipeline.
-    
+
     Pipeline: Compiling → Correctness → Performance
     """
-    
+
     def __init__(self, pipeline_cfg: PipelineConfig) -> None:
         """
         Initialize the evaluator.
-        
+
         Args:
             pipeline_cfg: Pipeline configuration
         """
@@ -147,10 +163,10 @@ class Evaluator:
     def evaluate(self, kernel_cfg: KernelEvalConfig) -> EvaluationState:
         """
         Run the complete evaluation pipeline.
-        
+
         Args:
             kernel_cfg: Kernel configuration
-            
+
         Returns:
             EvaluationState with results from all stages
         """
@@ -177,15 +193,13 @@ class Evaluator:
         return state
 
     def _compile(
-        self, 
-        state: EvaluationState, 
-        kernel_cfg: KernelEvalConfig
+        self, state: EvaluationState, kernel_cfg: KernelEvalConfig
     ) -> EvaluationState:
         """Compile the kernel."""
         try:
             result = self.compiling.run(kernel_cfg)
             state.compiling_result = result
-            
+
             if result is None:
                 # No compilation needed (skipped)
                 state.compiling_state = BaseKind.SKIPPED
@@ -198,19 +212,17 @@ class Evaluator:
         except Exception as e:
             state.compiling_state = BaseKind.FAILED
             state.errors.append(f"Compilation error: {str(e)}")
-            
+
         return state
 
     def _check_correctness(
-        self, 
-        state: EvaluationState, 
-        kernel_cfg: KernelEvalConfig
+        self, state: EvaluationState, kernel_cfg: KernelEvalConfig
     ) -> EvaluationState:
         """Check kernel correctness."""
         try:
             result = self.correctness.run(state, kernel_cfg)
             state.correctness_result = result
-            
+
             if result.success:
                 state.correctness_state = BaseKind.SUCCESS
             else:
@@ -220,19 +232,17 @@ class Evaluator:
         except Exception as e:
             state.correctness_state = BaseKind.FAILED
             state.errors.append(f"Correctness error: {str(e)}")
-            
+
         return state
 
     def _check_performance(
-        self, 
-        state: EvaluationState, 
-        kernel_cfg: KernelEvalConfig
+        self, state: EvaluationState, kernel_cfg: KernelEvalConfig
     ) -> EvaluationState:
         """Measure kernel performance."""
         try:
             result = self.performance.run(state, kernel_cfg)
             state.performance_result = result
-            
+
             if result is None:
                 # No profiling (skipped)
                 state.performance_state = BaseKind.SKIPPED
@@ -245,22 +255,22 @@ class Evaluator:
         except Exception as e:
             state.performance_state = BaseKind.FAILED
             state.errors.append(f"Performance error: {str(e)}")
-            
+
         return state
 
     def _calculate_score(self, state: EvaluationState) -> EvaluationState:
         """Calculate overall evaluation score."""
         score = 0.0
-        
+
         # If compiling failed (not skipped), score is 0
         if state.compiling_state == BaseKind.FAILED:
             state.score = 0.0
             return state
-        
+
         # Correctness contributes 50%
         if state.correctness_state == BaseKind.SUCCESS:
             score += 0.5
-        
+
         # Performance contributes 50% (if not skipped)
         if state.performance_state == BaseKind.SUCCESS:
             score += 0.5
@@ -268,7 +278,6 @@ class Evaluator:
             # If performance is skipped, correctness gets full weight
             if state.correctness_state == BaseKind.SUCCESS:
                 score = 1.0
-        
+
         state.score = score
         return state
-

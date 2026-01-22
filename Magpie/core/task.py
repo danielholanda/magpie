@@ -11,14 +11,15 @@ This module defines Task and TaskResult for unified task management.
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from uuid import uuid4
 
-from ..config import KernelEvalConfig, EvalMode
+from ..config import KernelEvalConfig
 
 
 class TaskStatus(Enum):
     """Status of a task."""
+
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -28,6 +29,7 @@ class TaskStatus(Enum):
 
 class ModeType(Enum):
     """Type of evaluation mode."""
+
     ANALYZE = "analyze"
     COMPARE = "compare"
 
@@ -36,7 +38,7 @@ class ModeType(Enum):
 class ModeConfig:
     """
     Configuration for the evaluation mode.
-    
+
     Attributes:
         mode_type: Type of mode (analyze or compare)
         enable_default_compile: Enable default compilation when no compile_command
@@ -48,6 +50,7 @@ class ModeConfig:
         ncu_config: ncu configuration dict
         baseline_index: Baseline kernel index for compare mode
     """
+
     mode_type: ModeType = ModeType.ANALYZE
     enable_default_compile: bool = False
     check_performance: bool = True
@@ -63,7 +66,7 @@ class ModeConfig:
 class Task:
     """
     A task to be executed by the Executor.
-    
+
     Attributes:
         task_id: Unique identifier for the task
         kernel_configs: Kernel configurations to evaluate
@@ -72,13 +75,14 @@ class Task:
         priority: Task priority (higher = more important)
         metadata: Additional metadata
     """
+
     kernel_configs: List[KernelEvalConfig]
     mode_config: ModeConfig = field(default_factory=ModeConfig)
     task_id: str = field(default_factory=lambda: str(uuid4())[:8])
     status: TaskStatus = TaskStatus.PENDING
     priority: int = 0
     metadata: Dict[str, Any] = field(default_factory=dict)
-    
+
     def __post_init__(self):
         if isinstance(self.status, str):
             self.status = TaskStatus(self.status)
@@ -94,8 +98,10 @@ class Task:
         """Convert to dictionary."""
         return {
             "task_id": self.task_id,
-            "kernel_configs": [cfg.to_dict() if hasattr(cfg, 'to_dict') else str(cfg) 
-                              for cfg in self.kernel_configs],
+            "kernel_configs": [
+                cfg.to_dict() if hasattr(cfg, "to_dict") else str(cfg)
+                for cfg in self.kernel_configs
+            ],
             "mode_config": {
                 "mode_type": self.mode_config.mode_type.value,
                 "enable_default_compile": self.mode_config.enable_default_compile,
@@ -117,7 +123,7 @@ class Task:
 class TaskResult:
     """
     Result of a task execution.
-    
+
     Attributes:
         task_id: ID of the task
         status: Final status of the task
@@ -126,13 +132,14 @@ class TaskResult:
         execution_time: Time taken to execute the task in seconds
         metadata: Additional metadata
     """
+
     task_id: str
     status: TaskStatus = TaskStatus.COMPLETED
     results: Any = None
     errors: List[str] = field(default_factory=list)
     execution_time: float = 0.0
     metadata: Dict[str, Any] = field(default_factory=dict)
-    
+
     def __post_init__(self):
         if isinstance(self.status, str):
             self.status = TaskStatus(self.status)
@@ -147,13 +154,14 @@ class TaskResult:
         results_dict = None
         if self.results is not None:
             if isinstance(self.results, list):
-                results_dict = [r.to_dict() if hasattr(r, 'to_dict') else r 
-                               for r in self.results]
-            elif hasattr(self.results, 'to_dict'):
+                results_dict = [
+                    r.to_dict() if hasattr(r, "to_dict") else r for r in self.results
+                ]
+            elif hasattr(self.results, "to_dict"):
                 results_dict = self.results.to_dict()
             else:
                 results_dict = self.results
-                
+
         return {
             "task_id": self.task_id,
             "status": self.status.value,
@@ -163,4 +171,3 @@ class TaskResult:
             "execution_time": self.execution_time,
             "metadata": self.metadata,
         }
-
