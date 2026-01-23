@@ -22,6 +22,7 @@ Usage:
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -124,6 +125,8 @@ def _parse_command_list(cmd_entry) -> Optional[List]:
     if cmd_entry is None:
         return None
 
+    cmd_entry = _expand_env_vars(cmd_entry)
+
     if isinstance(cmd_entry, str):
         # Single string command: "make build" -> ["make", "build"]
         return cmd_entry.split()
@@ -145,12 +148,27 @@ def _parse_command_list(cmd_entry) -> Optional[List]:
     return None
 
 
+def _expand_env_vars(value):
+    """Recursively expand environment variables in strings."""
+    if isinstance(value, str):
+        return os.path.expandvars(value)
+    if isinstance(value, list):
+        return [_expand_env_vars(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _expand_env_vars(val) for key, val in value.items()}
+    return value
+
+
 def _parse_kernel_entry(entry: Dict[str, Any]) -> Optional[KernelEvalConfig]:
     """Parse a single kernel entry from config."""
     if not entry:
         return None
 
     kernel_type = parse_kernel_type(entry.get("type", "hip"))
+
+    source_files = _expand_env_vars(entry.get("source_files", []))
+    working_dir = _expand_env_vars(entry.get("working_dir"))
+    env = _expand_env_vars(entry.get("env"))
 
     # Parse testcase command(s)
     testcase_cmd = _parse_command_list(entry.get("testcase_command"))
@@ -164,9 +182,9 @@ def _parse_kernel_entry(entry: Dict[str, Any]) -> Optional[KernelEvalConfig]:
     return KernelEvalConfig(
         kernel_id=entry.get("id", "kernel"),
         kernel_type=kernel_type,
-        source_file_path=entry.get("source_files", []),
-        working_dir=entry.get("working_dir"),
-        env=entry.get("env"),
+        source_file_path=source_files,
+        working_dir=working_dir,
+        env=env,
         testcase_command=testcase_cmd,
         compiling_command=compile_cmd,
         prof_command=prof_cmd,
