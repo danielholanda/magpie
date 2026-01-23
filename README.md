@@ -6,8 +6,8 @@ A lightweight, general-purpose framework for evaluating GPU kernel correctness a
 
 - **Three Evaluation Modes**: Analyze, Compare, Benchmark (WIP)
 - **Heterogeneous Hardware**: AMD (HIP) and NVIDIA (CUDA) GPUs
-- **Execution Environments**: Local and Container modes
-- **Hardware Control**: Power and frequency management
+- **Execution Environments**: Local, Sandbox Container and Remote Ray Cluser
+- **Hardware Control**: hardware-aware kernel evaluation under controlled execution settings
 - **MCP Server**: Model Context Protocol integration for AI agents
 - **Structured Reports**: JSON output for pipeline integration
 
@@ -45,23 +45,21 @@ python -m Magpie.mcp
 
 ### Framework Config (`Magpie/config.yaml`)
 
-```yaml
-gpu:
-  device_ids: [0]
-  hardware:
-    enabled: true
-
-performance:
-  timeout_seconds: 120
-  rocprof_compute:
-    args: []
-  ncu:
-    args: ["--target-processes", "all"]
-```
+Key categories:
+- `gpu`: force device selection and hardware control (power/frequency).
+- `scheduler`: local/container/remote execution and scheduling behavior.
+- `performance`: profiling and profiler configuration.
+- `logging`: log levels and output formatting.
 
 ### Kernel Config
 
 See [`Magpie/kernel_config.yaml.example`](./Magpie/kernel_config.yaml.example) for full examples.
+
+#### Example
+
+Example configs live in `examples/`:
+- Analyze (single kernel): `examples/ck_gemm_add.yaml`
+- Compare (multi-kernel): `examples/ck_grouped_gemm_compare.yaml`
 
 ## MCP Server
 
@@ -72,6 +70,9 @@ Available tools:
 - `compare` - Compare multiple kernel implementations
 - `hardware_spec` - Query GPU hardware specifications
 - `configure_gpu` - Configure GPU power and frequency
+- `discover_kernels` - Scan a project and suggest analyzable kernels/configs
+- `suggest_optimizations` - Suggest performance optimizations from analyze output
+- `create_kernel_config` - Generate a kernel config YAML for analyze
 
 ## Development
 
@@ -89,13 +90,13 @@ make format
 ├── .gitignore
 ├── requirements.txt
 ├── Makefile
+├── examples/            # Example configurations
 └── Magpie/
     ├── __init__.py          # Package initialization
     ├── __main__.py          # Entry point for python -m Magpie
     ├── main.py              # CLI implementation
     ├── config.yaml           # Framework configuration
     ├── kernel_config.yaml.example
-    ├── examples/            # Example configurations
     ├── config/               # Configuration classes
     ├── core/                # Core engine components
     ├── eval/                # Evaluation pipeline
@@ -110,14 +111,19 @@ make format
     └── utils/               # Utility functions
 ```
 
-## Pipeline (Analyze & Compare)
+## Overall Architecture Diagram
 
-```
-Compiling → Correctness → Performance
-    ↓            ↓             ↓
-  hipcc/nvcc      testcase     rocprof-compute / ncu
-```
+![Overall Architecture](docs/images/overall-architecture.png)
 
+## Eval Pipeline
+
+### Analyze & Compare
+
+![Analyze & Compare Pipeline](docs/images/analyze-compare-pipeline.png)
+
+### Benchmark
+
+![Benchmark Pipeline](docs/images/benchmark-pipeline.png)
 
 ## License
 
