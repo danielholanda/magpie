@@ -58,7 +58,7 @@ scheduler:
   # Maximum number of parallel workers (processes) for task execution
   max_workers: 8
   
-  # Execution environment: local, docker
+  # Execution environment: local, container
   environment: local
 
   docker_image: null

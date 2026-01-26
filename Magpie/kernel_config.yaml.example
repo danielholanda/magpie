@@ -4,9 +4,10 @@
 # Copy and modify for your kernel evaluation.
 
 # =============================================================================
-# Single Kernel Example (Analyze Mode)
+# Analyze Mode Example (Single or Multiple Kernels)
 # =============================================================================
 # python main.py analyze --kernel-config my_kernel.yaml
+# Note: my_kernel.yaml can contain either `kernel` (single) or `kernels` (multiple).
 
 kernel:
   # Kernel identifier
@@ -98,24 +99,6 @@ kernel:
 #   - id: "optimized_v2"
 #     type: hip
 #     source_files: ["./kernels/matmul_v3.hip"]
-
-# =============================================================================
-# PyTorch Kernel Example
-# =============================================================================
-# For PyTorch kernels in compare mode, define input generation functions
-
-# kernel:
-#   id: "pytorch_model"
-#   type: pytorch
-#   source_files:
-#     - "./models/model.py"
-#   
-#   # Input generation function names (in the source file)
-#   get_inputs_func: "get_inputs"
-#   get_init_inputs_func: "get_init_inputs"
-#   
-#   # Model class name
-#   model_class: "Model"
 
 # =============================================================================
 # HIP Kernel with Custom Compilation
