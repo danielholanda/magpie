@@ -118,34 +118,3 @@ kernel:
 #       -o kernel.out
 #   
 #   testcase_command: "./kernel.out --test"
-
-# =============================================================================
-# Command Format Reference
-# =============================================================================
-# Commands can be specified in these formats:
-#
-# 1. Single string command:
-#    compile_command: "make build"
-#
-# 2. Single command as list of args:
-#    compile_command: ["make", "-j4", "build"]
-#    # Or in YAML block style:
-#    compile_command:
-#      - make
-#      - -j4
-#      - build
-#
-# 3. Multiple commands as list of lists:
-#    compile_command:
-#      - ["cmake", "-B", "build"]
-#      - ["cmake", "--build", "build"]
-#    # Or in YAML block style:
-#    compile_command:
-#      - - cmake
-#        - -B
-#        - build
-#      - - cmake
-#        - --build
-#        - build
-
-
