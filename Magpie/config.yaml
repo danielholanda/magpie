@@ -10,7 +10,7 @@
 # Used by: scheduler, hardware controller, profiler
 gpu:
   # List of GPU device IDs to use (null = all available GPUs)
-  device_ids: null           # e.g., [0, 1, 2, 3] for specific GPUs
+  device_ids: null           # e.g., [0, 1, 2, 3] for specific GPUs, n
   
   # Whether to apply operations in parallel (faster for multi-GPU)
   parallel: true
@@ -18,7 +18,7 @@ gpu:
   # Hardware control settings (power/frequency management)
   hardware:
     # Enable hardware control
-    enabled: false
+    enabled: true
     
     # Reset clocks after benchmark
     reset_after_benchmark: true
@@ -68,7 +68,7 @@ scheduler:
 # =============================================================================
 output:
   directory: ./results
-  format: json  # json, csv, markdown
+  format: json  # json, csv,
 
 # =============================================================================
 # Logging
@@ -98,8 +98,11 @@ performance:
   rocprof_compute:
     # Directory to save profiling workloads (relative to kernel working_dir)
     workload_dir: "./workloads"
-    
-    # Metric blocks to collect (for gfx942/MI300 series)
+
+    profile_args: ["--no-roof"]
+    analyze_args: []
+
+    # Additional arguments both for profile and analyze
     # Using reduced set for faster profiling:
     #   1: System Info
     #   2: System Speed-of-Light (FLOPS, utilization, bandwidth)
@@ -111,22 +114,37 @@ performance:
     #  16: Vector L1 Data Cache
     #  17: L2 Cache
     metric_blocks: ["1", "2", "5", "10", "11", "12", "14", "16", "17"]
-    
-    # Skip roofline collection (faster profiling)
-    no_roof: true
-    
+
     # Output format for analyze stage
     output_format: "csv"
-    
-    # Additional profile arguments
-    profile_args: []
-    
-    # Additional analyze arguments  
-    analyze_args: []
     
   # ncu settings (NVIDIA GPU)
   # Additional arguments passed to ncu
   ncu:
     args: ["--target-processes", "all"]
-    # Specific metrics to collect (empty = default set)
     metrics: []
+
+
+compare:
+  # Per-backend weights (rocprof-compute for AMD, ncu for NVIDIA)
+  perf_weights_rocprof:
+    MFMA_FLOPs_BF16: 0.35
+    MFMA_FLOPs_F16: 0.35
+    MFMA_FLOPs_F32: 0.25
+    VALU_FLOPs: 0.10
+    LDS_BW: 0.15
+    LDS_Conflicts: 0.10
+    HBM_Read_BW: 0.10
+    HBM_Write_BW: 0.10
+    L2_BW: 0.05
+    Wavefront_Occ: 0.05
+    MFMA_Util: 0.10
+    VALU_Util: 0.05
+    duration_ns_total: 0.20
+  perf_weights_ncu:
+    # Example NCU metrics (customize based on your profile output)
+    sm__throughput.avg.pct_of_peak_sustained_elapsed: 0.40
+    l1tex__throughput.avg.pct_of_peak_sustained_elapsed: 0.10
+    lts__throughput.avg.pct_of_peak_sustained_elapsed: 0.10
+    dram__throughput.avg.pct_of_peak_sustained_elapsed: 0.20
+    duration_ns_total: 0.20

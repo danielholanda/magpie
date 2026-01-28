@@ -10,6 +10,7 @@ Performance evaluation configuration.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import shlex
 from enum import Enum, auto
 from pathlib import Path
 from typing import List, Optional, TYPE_CHECKING
@@ -92,13 +93,12 @@ class RocprofComputeConfig:
 
     Attributes:
         workload_dir: Base directory to save profiling workloads
-        profile_args: Additional arguments for 'rocprof-compute profile'
-        analyze_args: Additional arguments for 'rocprof-compute analyze'
+        profile_args: Additional arguments for rocprof-compute profile
+        analyze_args: Additional arguments for rocprof-compute analyze
         metric_blocks: Metric block IDs to collect
                       Default: ["1", "2", "5", "10", "11", "12", "14", "16", "17"]
         kernel_filter: Kernel name filter (optional, -k flag)
         dispatch_filter: Dispatch ID filter (optional, -d flag)
-        no_roof: Skip roofline data collection (default: True for faster profiling)
         output_format: Output format for analyze (csv, json, etc.)
         target_gpu: Target GPU architecture (e.g., "gfx942", auto-detected if None)
     """
@@ -111,7 +111,6 @@ class RocprofComputeConfig:
     )
     kernel_filter: Optional[str] = None
     dispatch_filter: Optional[List[int]] = None
-    no_roof: bool = True
     output_format: str = "csv"
     target_gpu: Optional[str] = None
 
@@ -149,12 +148,8 @@ class RocprofComputeConfig:
         if self.dispatch_filter:
             args.extend(["-d"] + [str(d) for d in self.dispatch_filter])
 
-        # Skip roofline if requested
-        if self.no_roof:
-            args.append("--no-roof")
-
-        # Add custom args
-        args.extend(self.profile_args)
+        # Add custom args (split to support single-string entries)
+        args.extend(self._expand_args(self.profile_args))
 
         return args
 
@@ -184,10 +179,17 @@ class RocprofComputeConfig:
         if output_dir and self.output_format == "csv":
             args.extend(["--save-dfs", output_dir])
 
-        # Add custom args
-        args.extend(self.analyze_args)
-
+        # Add custom analyze args (split to support single-string entries)
+        args.extend(self._expand_args(self.analyze_args))
         return args
+
+    def _expand_args(self, raw_args: List[str]) -> List[str]:
+        """Expand args entries that may contain whitespace into tokens."""
+        expanded: List[str] = []
+        for arg in raw_args:
+            if isinstance(arg, str):
+                expanded.extend(shlex.split(arg))
+        return expanded
 
     def get_workload_path(
         self, workload_name: str, base_dir: Optional[str] = None

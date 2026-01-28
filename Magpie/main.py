@@ -234,7 +234,6 @@ def _get_performance_config(
 
     if kernel_type == KernelType.HIP:
         rocprof_cfg = perf_cfg.get("rocprof_compute", {})
-        profiler_args = rocprof_cfg.get("profile_args", rocprof_cfg.get("args", []))
 
         # Build full rocprof config
         rocprof_config = {
@@ -242,7 +241,6 @@ def _get_performance_config(
             "metric_blocks": rocprof_cfg.get(
                 "metric_blocks", ["1", "2", "5", "10", "11", "12", "14", "16", "17"]
             ),
-            "no_roof": rocprof_cfg.get("no_roof", True),
             "output_format": rocprof_cfg.get("output_format", "csv"),
             "profile_args": rocprof_cfg.get("profile_args", []),
             "analyze_args": rocprof_cfg.get("analyze_args", []),
@@ -261,6 +259,19 @@ def _get_performance_config(
         "rocprof_config": rocprof_config,
         "ncu_config": ncu_config,
     }
+
+
+def _get_compare_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Get compare configuration from framework config.
+
+    Args:
+        config: Framework config dict
+
+    Returns:
+        Dict with compare settings
+    """
+    return config.get("compare", {})
 
 
 def _get_scheduler_config(config: Dict[str, Any], args) -> SchedulerConfig:
@@ -432,6 +443,7 @@ def run_compare(args, config: Dict[str, Any]) -> int:
     # Get config from framework config
     compile_settings = _get_compiling_config(config)
     perf_settings = _get_performance_config(config, kernel_type)
+    compare_settings = _get_compare_config(config)
 
     # Create scheduler
     scheduler_config = _get_scheduler_config(config, args)
@@ -452,6 +464,7 @@ def run_compare(args, config: Dict[str, Any]) -> int:
             profiler_args=perf_settings["profiler_args"],
             rocprof_config=perf_settings["rocprof_config"],
             ncu_config=perf_settings["ncu_config"],
+            compare_config=compare_settings,
         )
 
         # Print results

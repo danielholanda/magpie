@@ -54,12 +54,13 @@ class ModeConfig:
     mode_type: ModeType = ModeType.ANALYZE
     enable_default_compile: bool = False
     check_performance: bool = True
-    gpu_arch: str = "gfx942"
+    gpu_arch: str = None,
     timeout_seconds: float = 300.0
     profiler_args: List[str] = field(default_factory=list)
     rocprof_config: Dict[str, Any] = field(default_factory=dict)
     ncu_config: Dict[str, Any] = field(default_factory=dict)
     baseline_index: int = 0  # For compare mode
+    compare_config: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -112,6 +113,7 @@ class Task:
                 "rocprof_config": self.mode_config.rocprof_config,
                 "ncu_config": self.mode_config.ncu_config,
                 "baseline_index": self.mode_config.baseline_index,
+                "compare_config": self.mode_config.compare_config,
             },
             "status": self.status.value,
             "priority": self.priority,

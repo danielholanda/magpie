@@ -21,6 +21,7 @@ from ...config import (
     EvalMode,
     PipelineConfig,
     KernelEvalConfig,
+    KernelType,
     CompilingConfig,
     CorrectnessConfig,
     CorrectnessMode,
@@ -49,13 +50,22 @@ class CompareConfig:
     """
 
     baseline_index: int = 0
-    gpu_arch: str = "gfx90a"
+    gpu_arch: str = None,
     enable_default_compile: bool = False
     check_performance: bool = True
     timeout_seconds: float = 300.0
     profiler_args: List[str] = field(default_factory=list)
     rocprof_config: Dict[str, Any] = field(default_factory=dict)
     ncu_config: Dict[str, Any] = field(default_factory=dict)
+    # Winner selection strategy: "correctness_first" or "perf_score"
+    winner_strategy: str = "perf_score"
+    # Per-backend scoring weights
+    perf_weights_rocprof: Dict[str, float] = field(default_factory=dict)
+    perf_weights_ncu: Dict[str, float] = field(default_factory=dict)
+    # Metrics where lower values are better (e.g., duration)
+    perf_lower_is_better: List[str] = field(
+        default_factory=lambda: ["duration_ns_total", "LDS_Conflicts"]
+    )
 
 
 @dataclass
@@ -137,7 +147,6 @@ class CompareMode:
                         "metric_blocks",
                         ["1", "2", "5", "10", "11", "12", "14", "16", "17"],
                     ),
-                    no_roof=self.config.rocprof_config.get("no_roof", True),
                     output_format=self.config.rocprof_config.get(
                         "output_format", "csv"
                     ),
@@ -197,16 +206,119 @@ class CompareMode:
         comparison.comparison_metrics["correctness"] = correctness_results
         comparison.comparison_metrics["all_correct"] = all(correctness_results)
 
-        # For now, winner is the first kernel that passes correctness
-        for i, correct in enumerate(correctness_results):
-            if correct:
-                comparison.winner = i
-                break
+        # Performance-based scoring (optional)
+        kernel_type = kernel_configs[0].kernel_type if kernel_configs else KernelType.HIP
+        perf_scores = self._compute_perf_scores(
+            results, correctness_results, kernel_type
+        )
+        comparison.comparison_metrics["perf_scores"] = perf_scores
+        comparison.rankings = sorted(
+            [(i, s) for i, s in enumerate(perf_scores) if s is not None],
+            key=lambda x: x[1],
+            reverse=True,
+        )
+
+        if self.config.winner_strategy == "perf_score" and comparison.rankings:
+            comparison.winner = comparison.rankings[0][0]
+        else:
+            # Fallback: first kernel that passes correctness
+            for i, correct in enumerate(correctness_results):
+                if correct:
+                    comparison.winner = i
+                    break
 
         # Generate summary
         comparison.summary = self._generate_summary(comparison, kernel_configs)
 
         return comparison
+
+    def _get_perf_weights(self, kernel_type: KernelType) -> Dict[str, float]:
+        """Select per-backend weights, with sane fallbacks."""
+        if kernel_type == KernelType.CUDA:
+            if self.config.perf_weights_ncu:
+                return self.config.perf_weights_ncu
+            return self.config.perf_weights_rocprof
+        if self.config.perf_weights_rocprof:
+            return self.config.perf_weights_rocprof
+        return self.config.perf_weights_ncu
+
+    def _get_perf_value(
+        self, state: EvaluationState, metric: str
+    ) -> Optional[float]:
+        perf = state.performance_result
+        if perf is None or not perf.success:
+            return None
+
+        # Summary metrics (FLOPs, bandwidth, utilization, etc.)
+        summary = perf.get_summary_metrics()
+        entry = summary.get(metric)
+        if entry:
+            if entry.get("pct_of_peak") is not None:
+                return float(entry["pct_of_peak"])
+            val = entry.get("value")
+            return float(val) if val is not None else None
+
+        # Synthetic metric: total kernel duration (ns)
+        if metric == "duration_ns_total":
+            total = 0.0
+            found = False
+            for kernel in perf.get_kernel_summary():
+                dur = kernel.get("duration_ns", {}).get("total")
+                if dur is not None:
+                    total += float(dur)
+                    found = True
+            return total if found else None
+
+        return None
+
+    def _compute_perf_scores(
+        self,
+        results: List[EvaluationState],
+        correctness_results: List[bool],
+        kernel_type: KernelType,
+    ) -> List[Optional[float]]:
+        weights = self._get_perf_weights(kernel_type)
+        if not weights:
+            return [None for _ in results]
+
+        # Gather values per metric for normalization
+        metric_values: Dict[str, List[Optional[float]]] = {
+            metric: [] for metric in weights
+        }
+        for state, correct in zip(results, correctness_results):
+            for metric in weights:
+                val = self._get_perf_value(state, metric) if correct else None
+                metric_values[metric].append(val)
+
+        scores: List[Optional[float]] = []
+        for idx, correct in enumerate(correctness_results):
+            if not correct:
+                scores.append(None)
+                continue
+
+            score = 0.0
+            used_any = False
+            for metric, weight in weights.items():
+                values = [v for v in metric_values[metric] if v is not None]
+                if not values:
+                    continue
+                val = metric_values[metric][idx]
+                if val is None:
+                    continue
+
+                if metric in self.config.perf_lower_is_better:
+                    denom = val if val != 0 else None
+                    norm = (min(values) / denom) if denom else 0.0
+                else:
+                    denom = max(values)
+                    norm = (val / denom) if denom else 0.0
+
+                score += float(weight) * float(norm)
+                used_any = True
+
+            scores.append(score if used_any else None)
+
+        return scores
 
     def _generate_summary(
         self, comparison: ComparisonResult, kernel_configs: List[KernelEvalConfig]

@@ -602,7 +602,7 @@ def _execute_task_worker(task_dict: Dict[str, Any]) -> Dict[str, Any]:
                 profiler_args=mode_cfg.get("profiler_args", []),
                 rocprof_config=mode_cfg.get("rocprof_config", {}),
                 ncu_config=mode_cfg.get("ncu_config", {}),
-                gpu_arch=mode_cfg.get("gpu_arch", "gfx942"),
+                gpu_arch=mode_cfg.get("gpu_arch", None),
             )
             analyzer = AnalyzeMode(analyze_config)
 
@@ -615,6 +615,7 @@ def _execute_task_worker(task_dict: Dict[str, Any]) -> Dict[str, Any]:
 
         elif mode_type == ModeType.COMPARE:
             # Create comparator
+            compare_cfg = mode_cfg.get("compare_config", {})
             compare_config = CompareConfig(
                 baseline_index=mode_cfg.get("baseline_index", 0),
                 enable_default_compile=mode_cfg.get("enable_default_compile", False),
@@ -623,7 +624,10 @@ def _execute_task_worker(task_dict: Dict[str, Any]) -> Dict[str, Any]:
                 profiler_args=mode_cfg.get("profiler_args", []),
                 rocprof_config=mode_cfg.get("rocprof_config", {}),
                 ncu_config=mode_cfg.get("ncu_config", {}),
-                gpu_arch=mode_cfg.get("gpu_arch", "gfx942"),
+                gpu_arch=mode_cfg.get("gpu_arch", None),
+                winner_strategy=compare_cfg.get("winner_strategy", "perf_score"),
+                perf_weights_rocprof=compare_cfg.get("perf_weights_rocprof", {}),
+                perf_weights_ncu=compare_cfg.get("perf_weights_ncu", {}),
             )
             comparator = CompareMode(compare_config)
 

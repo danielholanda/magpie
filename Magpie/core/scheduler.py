@@ -145,12 +145,13 @@ class Scheduler:
         mode_type: ModeType = ModeType.ANALYZE,
         enable_default_compile: bool = False,
         check_performance: bool = True,
-        gpu_arch: str = "gfx942",
+        gpu_arch: str = None,
         timeout_seconds: float = 300.0,
         profiler_args: Optional[List[str]] = None,
         rocprof_config: Optional[Dict[str, Any]] = None,
         ncu_config: Optional[Dict[str, Any]] = None,
         baseline_index: int = 0,
+        compare_config: Optional[Dict[str, Any]] = None,
         priority: int = 0,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Task:
@@ -184,6 +185,7 @@ class Scheduler:
             rocprof_config=rocprof_config or {},
             ncu_config=ncu_config or {},
             baseline_index=baseline_index,
+            compare_config=compare_config or {},
         )
 
         task = Task(
@@ -261,7 +263,7 @@ class Scheduler:
         kernel_configs: List[KernelEvalConfig],
         enable_default_compile: bool = False,
         check_performance: bool = True,
-        gpu_arch: str = "gfx942",
+        gpu_arch: str = None,
         timeout_seconds: float = 300.0,
         profiler_args: Optional[List[str]] = None,
         rocprof_config: Optional[Dict[str, Any]] = None,
@@ -302,11 +304,12 @@ class Scheduler:
         baseline_index: int = 0,
         enable_default_compile: bool = False,
         check_performance: bool = True,
-        gpu_arch: str = "gfx942",
+        gpu_arch: str = None,
         timeout_seconds: float = 300.0,
         profiler_args: Optional[List[str]] = None,
         rocprof_config: Optional[Dict[str, Any]] = None,
         ncu_config: Optional[Dict[str, Any]] = None,
+        compare_config: Optional[Dict[str, Any]] = None,
     ) -> TaskResult:
         """
         Convenience method to run compare mode.
@@ -336,6 +339,7 @@ class Scheduler:
             profiler_args=profiler_args,
             rocprof_config=rocprof_config,
             ncu_config=ncu_config,
+            compare_config=compare_config,
         )
         return self.execute(task)
 
@@ -450,7 +454,7 @@ class Scheduler:
         kernel_configs_list: List[List[KernelEvalConfig]],
         enable_default_compile: bool = False,
         check_performance: bool = True,
-        gpu_arch: str = "gfx942",
+        gpu_arch: str = None,
         timeout_seconds: float = 300.0,
         profiler_args: Optional[List[str]] = None,
         rocprof_config: Optional[Dict[str, Any]] = None,
@@ -500,7 +504,7 @@ class Scheduler:
         baseline_index: int = 0,
         enable_default_compile: bool = False,
         check_performance: bool = True,
-        gpu_arch: str = "gfx942",
+        gpu_arch: str = None,
         timeout_seconds: float = 300.0,
         profiler_args: Optional[List[str]] = None,
         rocprof_config: Optional[Dict[str, Any]] = None,

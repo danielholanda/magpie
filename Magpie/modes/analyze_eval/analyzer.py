@@ -50,7 +50,7 @@ class AnalyzeConfig:
     """
 
     kernel_type: KernelType = KernelType.HIP
-    gpu_arch: str = "gfx942"
+    gpu_arch: str = None,
     enable_default_compile: bool = False
     check_performance: bool = True
     timeout_seconds: float = 300.0
@@ -96,7 +96,6 @@ class AnalyzeMode:
                 metric_blocks=self.config.rocprof_config.get(
                     "metric_blocks", ["1", "2", "5", "10", "11", "12", "14", "16", "17"]
                 ),
-                no_roof=self.config.rocprof_config.get("no_roof", True),
                 output_format=self.config.rocprof_config.get("output_format", "csv"),
                 profile_args=self.config.rocprof_config.get("profile_args", []),
                 analyze_args=self.config.rocprof_config.get("analyze_args", []),
