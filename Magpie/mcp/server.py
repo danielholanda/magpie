@@ -438,9 +438,12 @@ def compare(
     """
     Compare multiple GPU kernels for performance and correctness.
 
+    IMPORTANT: testcase_commands is REQUIRED and must have the same length as kernel_paths.
+    Each kernel needs its own test command to run.
+
     Args:
         kernel_paths: List of kernel source file paths (minimum 2)
-        testcase_commands: List of test commands for each kernel (must match kernel_paths length)
+        testcase_commands: List of test commands for each kernel (REQUIRED, must match kernel_paths length)
         kernel_type: "hip", "cuda", or "pytorch"
         baseline_index: Index of baseline kernel for comparison (default: 0)
         check_performance: Run performance profiling (default: True)
