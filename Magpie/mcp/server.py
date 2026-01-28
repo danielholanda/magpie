@@ -204,6 +204,17 @@ def analyze(
         if not scheduler.initialize():
             return json.dumps({"error": "Failed to initialize scheduler"})
 
+        # Build kernel_config dict for output
+        kernel_config_dict = {
+            "kernel_id": kernel_config.kernel_id,
+            "kernel_type": ktype.name,
+            "source_file_path": kernel_config.source_file_path,
+            "testcase_command": testcase_command,
+            "working_dir": kernel_config.working_dir,
+        }
+        if compile_command:
+            kernel_config_dict["compile_command"] = compile_command
+
         try:
             # Run analysis via scheduler
             task_result = scheduler.run_analyze(
@@ -213,21 +224,33 @@ def analyze(
 
             if task_result.success and task_result.results:
                 result = task_result.results[0]
-                return json.dumps(
-                    _format_analysis_result(result, kernel_config, ktype), indent=2
-                )
+                formatted = _format_analysis_result(result, kernel_config, ktype)
+                # Add kernel config to output
+                formatted["kernel_config"] = kernel_config_dict
+                return json.dumps(formatted, indent=2)
             else:
                 return json.dumps(
                     {
                         "error": "Analysis failed",
                         "errors": task_result.errors,
+                        "kernel_config": kernel_config_dict,
                     }
                 )
         finally:
             scheduler.shutdown()
 
     except Exception as e:
-        return json.dumps({"error": str(e), "kernel_path": kernel_path})
+        return json.dumps({
+            "error": str(e),
+            "kernel_path": kernel_path,
+            "kernel_config": {
+                "kernel_path": kernel_path,
+                "kernel_type": kernel_type,
+                "testcase_command": testcase_command,
+                "working_dir": working_dir or str(Path(kernel_path).parent),
+                "compile_command": compile_command or None,
+            }
+        })
 
 
 def _format_analysis_result(result: dict, kernel_config, ktype) -> dict:
@@ -406,8 +429,8 @@ def _format_performance_result(result) -> dict:
 @mcp.tool()
 def compare(
     kernel_paths: List[str],
+    testcase_commands: List[str],
     kernel_type: str = "hip",
-    testcase_command: str = "",
     baseline_index: int = 0,
     check_performance: bool = True,
     environment: str = "local",
@@ -417,14 +440,21 @@ def compare(
 
     Args:
         kernel_paths: List of kernel source file paths (minimum 2)
+        testcase_commands: List of test commands for each kernel (must match kernel_paths length)
         kernel_type: "hip", "cuda", or "pytorch"
-        testcase_command: Command to run the test case (optional)
         baseline_index: Index of baseline kernel for comparison (default: 0)
         check_performance: Run performance profiling (default: True)
         environment: Execution environment "local" or "container"
 
     Returns:
         JSON with comparison results, ranking, and summary
+
+    Example:
+        compare(
+            kernel_paths=["/path/kernel_v1.hip", "/path/kernel_v2.hip"],
+            testcase_commands=["./test_v1", "./test_v2"],
+            baseline_index=0
+        )
     """
     from ..config import KernelType, KernelEvalConfig
     from ..core import Scheduler
@@ -432,6 +462,11 @@ def compare(
     try:
         if len(kernel_paths) < 2:
             return json.dumps({"error": "Compare requires at least 2 kernels"})
+
+        if len(kernel_paths) != len(testcase_commands):
+            return json.dumps({
+                "error": f"kernel_paths ({len(kernel_paths)}) and testcase_commands ({len(testcase_commands)}) must have the same length"
+            })
 
         type_map = {
             "hip": KernelType.HIP,
@@ -441,26 +476,38 @@ def compare(
         ktype = type_map.get(kernel_type.lower(), KernelType.HIP)
 
         kernel_configs = []
-        for i, path in enumerate(kernel_paths):
+        kernel_configs_dict = []  # For output
+        for i, (path, cmd) in enumerate(zip(kernel_paths, testcase_commands)):
             kernel_file = Path(path)
+            kernel_id = f"kernel_{i}_{kernel_file.stem}"
             kernel_configs.append(
                 KernelEvalConfig(
-                    kernel_id=f"kernel_{i}_{kernel_file.stem}",
+                    kernel_id=kernel_id,
                     kernel_type=ktype,
                     source_file_path=[str(kernel_file)],
-                    testcase_command=testcase_command.split()
-                    if testcase_command
-                    else None,
+                    testcase_command=cmd.split() if cmd else None,
                     working_dir=str(kernel_file.parent),
                 )
             )
+            # Build config dict for output
+            kernel_configs_dict.append({
+                "kernel_id": kernel_id,
+                "kernel_type": ktype.name,
+                "source_file_path": str(kernel_file),
+                "testcase_command": cmd or None,
+                "working_dir": str(kernel_file.parent),
+                "is_baseline": i == baseline_index,
+            })
 
         # Create scheduler with config from config.yaml
         scheduler_config = _get_scheduler_config_from_yaml(environment)
         scheduler = Scheduler(scheduler_config)
 
         if not scheduler.initialize():
-            return json.dumps({"error": "Failed to initialize scheduler"})
+            return json.dumps({
+                "error": "Failed to initialize scheduler",
+                "kernel_configs": kernel_configs_dict,
+            })
 
         try:
             # Run comparison via scheduler
@@ -473,23 +520,42 @@ def compare(
             if task_result.success and task_result.results:
                 comparison = task_result.results
                 if isinstance(comparison, dict):
+                    comparison["kernel_configs"] = kernel_configs_dict
                     return json.dumps(comparison, indent=2)
                 elif hasattr(comparison, "to_dict"):
-                    return json.dumps(comparison.to_dict(), indent=2)
+                    result_dict = comparison.to_dict()
+                    result_dict["kernel_configs"] = kernel_configs_dict
+                    return json.dumps(result_dict, indent=2)
                 else:
-                    return json.dumps({"result": str(comparison)}, indent=2)
+                    return json.dumps({
+                        "result": str(comparison),
+                        "kernel_configs": kernel_configs_dict,
+                    }, indent=2)
             else:
                 return json.dumps(
                     {
                         "error": "Comparison failed",
                         "errors": task_result.errors,
+                        "kernel_configs": kernel_configs_dict,
                     }
                 )
         finally:
             scheduler.shutdown()
 
     except Exception as e:
-        return json.dumps({"error": str(e), "kernel_paths": kernel_paths})
+        return json.dumps({
+            "error": str(e),
+            "kernel_paths": kernel_paths,
+            "kernel_configs": [
+                {
+                    "kernel_path": p,
+                    "kernel_type": kernel_type,
+                    "testcase_command": testcase_commands[i] if i < len(testcase_commands) else None,
+                    "is_baseline": i == baseline_index,
+                }
+                for i, p in enumerate(kernel_paths)
+            ],
+        })
 
 
 # =============================================================================
@@ -575,6 +641,17 @@ def configure_gpu(
 # =============================================================================
 # Tool 5: discover_kernels
 # =============================================================================
+
+# Directories to skip during kernel discovery (for performance)
+_SKIP_DIRS = frozenset({
+    ".git", ".svn", ".hg",
+    "node_modules", "__pycache__", ".cache",
+    "venv", ".venv", "env", ".env",
+    ".tox", ".nox", ".pytest_cache",
+    "third_party", "external", "deps", "vendor",
+})
+
+
 @mcp.tool()
 def discover_kernels(
     project_path: str,
@@ -605,58 +682,50 @@ def discover_kernels(
         if not project.exists():
             return json.dumps({"error": f"Project path does not exist: {project_path}"})
 
-        # Define file patterns based on kernel type
-        patterns = []
+        # Define file extensions based on kernel type
+        extensions: set[str] = set()
         if kernel_type in ("hip", "all"):
-            patterns.extend(["**/*.hip", "**/*.cpp"])
+            extensions.update({".hip", ".cpp"})
         if kernel_type in ("cuda", "all"):
-            patterns.extend(["**/*.cu", "**/*.cuh"])
+            extensions.update({".cu", ".cuh"})
 
-        # Find source files
+        # Find source files using os.walk (faster, can skip directories)
         discovered = []
         build_dirs = ["build", "bin", "out", "cmake-build-release", "cmake-build-debug"]
+        max_results = 50
 
-        for pattern in patterns:
-            for source_file in project.glob(pattern):
-                # Skip if not in relevant directories
+        for root, dirs, files in os.walk(project):
+            # Prune directories we don't want to traverse (modifies dirs in-place)
+            dirs[:] = [d for d in dirs if d not in _SKIP_DIRS and not d.startswith(".")]
+
+            for filename in files:
+                # Check extension
+                ext = os.path.splitext(filename)[1]
+                if ext not in extensions:
+                    continue
+
+                source_file = Path(root) / filename
                 rel_path = str(source_file.relative_to(project))
-                is_test = "test" in rel_path.lower()
-                is_example = "example" in rel_path.lower()
+                rel_path_lower = rel_path.lower()
+
+                is_test = "test" in rel_path_lower
+                is_example = "example" in rel_path_lower
 
                 if not include_tests and is_test:
                     continue
                 if not include_examples and is_example:
                     continue
 
-                # Look for corresponding binaries
                 stem = source_file.stem
-                possible_binaries = []
 
-                for build_dir in build_dirs:
-                    build_path = project / build_dir
-                    if build_path.exists():
-                        # Look for binaries matching the source file name
-                        for binary in build_path.glob(f"**/{stem}"):
-                            if binary.is_file() and os.access(binary, os.X_OK):
-                                possible_binaries.append(str(binary))
-                        for binary in build_path.glob(f"**/*{stem}*"):
-                            if binary.is_file() and os.access(binary, os.X_OK):
-                                if str(binary) not in possible_binaries:
-                                    possible_binaries.append(str(binary))
-
-                # Generate suggested config
+                # Generate suggested config (defer binary search for performance)
                 suggested_config = {
                     "kernel_path": str(source_file),
-                    "kernel_type": "hip"
-                    if source_file.suffix in (".hip", ".cpp")
-                    else "cuda",
+                    "kernel_type": "hip" if ext in (".hip", ".cpp") else "cuda",
                     "working_dir": str(project / "build")
                     if (project / "build").exists()
                     else str(project),
                 }
-
-                if possible_binaries:
-                    suggested_config["testcase_command"] = possible_binaries[0]
 
                 discovered.append(
                     {
@@ -664,22 +733,52 @@ def discover_kernels(
                         "name": stem,
                         "is_test": is_test,
                         "is_example": is_example,
-                        "possible_binaries": possible_binaries[:5],  # Limit to 5
+                        "possible_binaries": [],  # Populated below for top results
                         "suggested_config": suggested_config,
                     }
                 )
+
+                # Early exit if we have enough candidates
+                if len(discovered) >= max_results * 2:
+                    break
+
+            if len(discovered) >= max_results * 2:
+                break
 
         # Sort by relevance (tests first, then examples)
         discovered.sort(
             key=lambda x: (not x["is_test"], not x["is_example"], x["name"])
         )
 
+        # Only search binaries for top results (expensive operation)
+        for entry in discovered[:max_results]:
+            stem = entry["name"]
+            possible_binaries = []
+
+            for build_dir in build_dirs:
+                build_path = project / build_dir
+                if not build_path.exists():
+                    continue
+
+                # Quick scan of build directory for matching binaries
+                for binary in build_path.rglob(stem):
+                    if binary.is_file() and os.access(binary, os.X_OK):
+                        possible_binaries.append(str(binary))
+                        if len(possible_binaries) >= 3:
+                            break
+                if possible_binaries:
+                    break
+
+            entry["possible_binaries"] = possible_binaries[:5]
+            if possible_binaries:
+                entry["suggested_config"]["testcase_command"] = possible_binaries[0]
+
         return json.dumps(
             {
                 "project_path": str(project),
                 "kernel_type": kernel_type,
                 "total_found": len(discovered),
-                "kernels": discovered[:50],  # Limit to 50 results
+                "kernels": discovered[:max_results],
             },
             indent=2,
         )
