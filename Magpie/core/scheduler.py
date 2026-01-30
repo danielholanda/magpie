@@ -152,6 +152,7 @@ class Scheduler:
         ncu_config: Optional[Dict[str, Any]] = None,
         baseline_index: int = 0,
         compare_config: Optional[Dict[str, Any]] = None,
+        benchmark_config: Optional[Dict[str, Any]] = None,
         priority: int = 0,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Task:
@@ -186,6 +187,7 @@ class Scheduler:
             ncu_config=ncu_config or {},
             baseline_index=baseline_index,
             compare_config=compare_config or {},
+            benchmark_config=benchmark_config or {},
         )
 
         task = Task(
@@ -546,6 +548,48 @@ class Scheduler:
             tasks.append(task)
 
         return self.execute_batch(tasks)
+
+    def run_benchmark(
+        self,
+        benchmark_config: Dict[str, Any],
+        gpu_arch: str = None,
+        timeout_seconds: float = 3600.0,
+    ) -> TaskResult:
+        """
+        Run benchmark mode.
+
+        Benchmark mode always uses container environment for execution.
+        Uses InferenceMAX as backend for vLLM/SGLang benchmarks.
+
+        Args:
+            benchmark_config: Benchmark configuration dict containing:
+                - framework: "vllm" or "sglang"
+                - model: Model name or path
+                - precision: "fp8", "fp16", "bf16"
+                - params: Dict with TP, CONC, ISL, OSL, etc.
+                - profiler: Profiler configuration
+                - docker_image: Optional image override
+            gpu_arch: GPU architecture (auto-detected if not specified)
+            timeout_seconds: Benchmark timeout
+
+        Returns:
+            TaskResult with benchmark results
+        """
+        # Benchmark mode forces container environment
+        if self.config.environment_type != EnvironmentType.CONTAINER:
+            logger.info("Benchmark mode: forcing container environment")
+            # Note: We don't actually switch executor here, the benchmark
+            # is executed directly via BenchmarkMode which handles its own
+            # Docker execution
+        
+        task = self.create_task(
+            kernel_configs=[],  # Benchmark mode doesn't use kernel configs
+            mode_type=ModeType.BENCHMARK,
+            gpu_arch=gpu_arch,
+            timeout_seconds=timeout_seconds,
+            benchmark_config=benchmark_config,
+        )
+        return self.execute(task)
 
     def get_task_status(self, task_id: str) -> Optional[TaskStatus]:
         """

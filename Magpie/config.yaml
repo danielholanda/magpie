@@ -148,3 +148,24 @@ compare:
     lts__throughput.avg.pct_of_peak_sustained_elapsed: 0.10
     dram__throughput.avg.pct_of_peak_sustained_elapsed: 0.20
     duration_ns_total: 0.20
+
+benchmark:
+  # Path to separate image mapping configuration file
+  image_config: "./benchmark_images.yaml"
+  
+  # Path to InferenceMAX installation
+  inferencemax_path: "YOUR_INFERENCEMAX_PATH"
+  
+  # Default timeout for benchmark tasks
+  timeout_seconds: 3600
+    
+  # Profiler configuration
+  profiler:
+    # PyTorch Profiler (default enabled)
+    torch_profiler:
+      enabled: true
+      
+    # System-level Profiler (rocprof-compute / ncu)
+    system_profiler:
+      enabled: false
+      profile_args: []  # Additional arguments for profiler command

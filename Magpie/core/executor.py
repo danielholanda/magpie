@@ -634,6 +634,29 @@ def _execute_task_worker(task_dict: Dict[str, Any]) -> Dict[str, Any]:
             # Execute comparison
             results = comparator.compare(kernel_configs)
 
+        elif mode_type == ModeType.BENCHMARK:
+            # Import benchmark mode
+            from ..modes.benchmark import BenchmarkMode, BenchmarkConfig
+            
+            # Get benchmark config
+            bench_cfg = mode_cfg.get("benchmark_config", {})
+            
+            # Create benchmark config
+            benchmark_config = BenchmarkConfig.from_dict(bench_cfg)
+            
+            # Override GPU arch and timeout if specified in mode config
+            if mode_cfg.get("gpu_arch"):
+                benchmark_config.gpu_arch = mode_cfg["gpu_arch"]
+            if mode_cfg.get("timeout_seconds"):
+                benchmark_config.timeout_seconds = mode_cfg["timeout_seconds"]
+            
+            # Create and run benchmarker
+            benchmarker = BenchmarkMode(benchmark_config)
+            benchmark_result = benchmarker.run(task_id=task_id)
+            
+            # Convert to dict for serialization
+            results = benchmark_result.to_dict()
+
         status = TaskStatus.COMPLETED
 
     except Exception as e:

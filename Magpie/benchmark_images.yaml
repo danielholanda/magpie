@@ -1,0 +1,28 @@
+# Benchmark Docker Image Mapping
+# Format: framework -> gpu_arch -> docker_image
+#
+# GPU Architecture Identifiers:
+#   AMD: gfx942 (MI300X), gfx950 (MI355X)
+#   NVIDIA: sm_80 (A100), sm_90 (H100/H200), sm_100 (B200)
+#
+# Usage:
+#   ImageSelector automatically selects the appropriate image based on detected GPU.
+#   If the architecture is not found, an error will be raised.
+
+vllm:
+  # AMD GPUs
+  gfx942: "rocm/vllm:rocm7.0.0_vllm_0.11.2_20251210"
+  gfx950: "rocm/vllm:rocm7.0.0_vllm_0.11.2_20251210"
+  # NVIDIA GPUs
+  sm_80: "vllm/vllm-openai:v0.11.2"
+  sm_90: "vllm/vllm-openai:v0.11.2"
+  sm_100: "vllm/vllm-openai:v0.11.2"
+
+sglang:
+  # AMD GPUs
+  gfx942: "lmsysorg/sglang:v0.5.8-rocm700-mi30x"
+  gfx950: "lmsysorg/sglang:v0.5.8-rocm700-mi30x"
+  # NVIDIA GPUs
+  sm_80: "lmsysorg/sglang:v0.5.8-cu130-amd64-runtime"
+  sm_90: "lmsysorg/sglang:v0.5.8-cu130-amd64-runtime"
+  sm_100: "lmsysorg/sglang:v0.5.8-cu130-amd64-runtime"

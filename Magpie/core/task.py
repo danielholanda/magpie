@@ -32,6 +32,7 @@ class ModeType(Enum):
 
     ANALYZE = "analyze"
     COMPARE = "compare"
+    BENCHMARK = "benchmark"
 
 
 @dataclass
@@ -40,7 +41,7 @@ class ModeConfig:
     Configuration for the evaluation mode.
 
     Attributes:
-        mode_type: Type of mode (analyze or compare)
+        mode_type: Type of mode (analyze, compare, or benchmark)
         enable_default_compile: Enable default compilation when no compile_command
         check_performance: Whether to run performance profiling
         gpu_arch: GPU architecture
@@ -49,6 +50,7 @@ class ModeConfig:
         rocprof_config: rocprof-compute configuration dict
         ncu_config: ncu configuration dict
         baseline_index: Baseline kernel index for compare mode
+        benchmark_config: Configuration for benchmark mode
     """
 
     mode_type: ModeType = ModeType.ANALYZE
@@ -61,6 +63,7 @@ class ModeConfig:
     ncu_config: Dict[str, Any] = field(default_factory=dict)
     baseline_index: int = 0  # For compare mode
     compare_config: Dict[str, Any] = field(default_factory=dict)
+    benchmark_config: Dict[str, Any] = field(default_factory=dict)  # For benchmark mode
 
 
 @dataclass
@@ -114,6 +117,7 @@ class Task:
                 "ncu_config": self.mode_config.ncu_config,
                 "baseline_index": self.mode_config.baseline_index,
                 "compare_config": self.mode_config.compare_config,
+                "benchmark_config": self.mode_config.benchmark_config,
             },
             "status": self.status.value,
             "priority": self.priority,

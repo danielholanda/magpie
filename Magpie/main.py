@@ -606,6 +606,104 @@ def _save_comparison(comparison: Any, output_dir: Path) -> None:
     logger.info(f"Comparison saved to {output_file}")
 
 
+def load_benchmark_config(benchmark_config_path: Path) -> Dict[str, Any]:
+    """
+    Load benchmark configuration from YAML file.
+
+    Returns:
+        Dictionary with benchmark configuration
+    """
+    data = load_yaml(benchmark_config_path)
+    return data.get("benchmark", {})
+
+
+def run_benchmark(args, config: Dict[str, Any]) -> int:
+    """Run benchmark mode."""
+    from .modes.benchmark import BenchmarkMode, BenchmarkConfig
+    
+    # Build benchmark config
+    benchmark_cfg = {}
+    
+    if args.benchmark_config:
+        # Load from config file
+        benchmark_cfg = load_benchmark_config(args.benchmark_config)
+        if not benchmark_cfg:
+            logger.error(f"No benchmark config found in {args.benchmark_config}")
+            return 1
+    elif args.framework and args.model:
+        # Build from CLI arguments
+        benchmark_cfg = {
+            "framework": args.framework,
+            "model": args.model,
+            "precision": args.precision,
+            "params": {
+                "TP": args.tp,
+                "CONC": args.concurrency,
+                "ISL": args.input_len,
+                "OSL": args.output_len,
+                "RANDOM_RANGE_RATIO": 0.5,
+            },
+            "profiler": {
+                "torch_profiler": {
+                    "enabled": not args.no_torch_profiler,
+                },
+                "system_profiler": {
+                    "enabled": args.system_profiler,
+                },
+            },
+            "docker_image": args.docker_image,
+            "inferencemax_path": args.inferencemax_path,
+            "benchmark_script": args.benchmark_script,
+            "timeout_seconds": args.timeout,
+        }
+    else:
+        logger.error("Benchmark mode requires either --benchmark-config or (framework and --model)")
+        print("Error: Specify --benchmark-config or provide framework and --model")
+        print("Example: python -m Magpie benchmark sglang --model meta-llama/Llama-2-7b-hf")
+        return 1
+    
+    # Get benchmark settings from framework config
+    bench_settings = config.get("benchmark", {})
+    
+    # Merge with framework config defaults
+    if "inferencemax_path" not in benchmark_cfg or not benchmark_cfg["inferencemax_path"]:
+        benchmark_cfg["inferencemax_path"] = bench_settings.get(
+            "inferencemax_path", "/root/hao_workspace/InferenceMAX"
+        )
+    
+    # Create benchmark config object
+    try:
+        benchmark_config = BenchmarkConfig.from_dict(benchmark_cfg)
+    except Exception as e:
+        logger.error(f"Invalid benchmark configuration: {e}")
+        return 1
+    
+    # Run benchmark directly (benchmark mode handles its own Docker execution)
+    logger.info(f"Starting benchmark: {benchmark_config.framework} / {benchmark_config.model}")
+    
+    try:
+        benchmarker = BenchmarkMode(
+            config=benchmark_config,
+            output_dir=str(args.output_dir),
+        )
+        result = benchmarker.run()
+        
+        # Print results
+        print(result.get_summary())
+        
+        if result.success:
+            logger.info(f"Benchmark completed successfully")
+            logger.info(f"Results saved to: {result.workspace_dir}")
+            return 0
+        else:
+            logger.error(f"Benchmark failed: {result.errors}")
+            return 1
+            
+    except Exception as e:
+        logger.exception(f"Benchmark failed with error: {e}")
+        return 1
+
+
 def create_parser() -> argparse.ArgumentParser:
     """Create argument parser."""
     parser = argparse.ArgumentParser(
@@ -708,6 +806,75 @@ def create_parser() -> argparse.ArgumentParser:
         help="Output directory",
     )
 
+    # Benchmark subcommand
+    benchmark_parser = subparsers.add_parser(
+        "benchmark", help="Run framework benchmark (vLLM/SGLang)"
+    )
+    benchmark_parser.add_argument(
+        "framework",
+        type=str,
+        nargs="?",
+        choices=["vllm", "sglang"],
+        help="Framework to benchmark",
+    )
+    benchmark_parser.add_argument(
+        "--benchmark-config", "-b", type=Path, help="Benchmark configuration file"
+    )
+    benchmark_parser.add_argument(
+        "--model", "-m", type=str, help="Model name or path"
+    )
+    benchmark_parser.add_argument(
+        "--precision", "-p", type=str, default="fp8",
+        choices=["fp8", "fp16", "bf16", "fp4"],
+        help="Model precision (default: fp8)"
+    )
+    benchmark_parser.add_argument(
+        "--tp", type=int, default=1, help="Tensor parallel size"
+    )
+    benchmark_parser.add_argument(
+        "--concurrency", type=int, default=32, help="Request concurrency"
+    )
+    benchmark_parser.add_argument(
+        "--input-len", type=int, default=1024, help="Input sequence length"
+    )
+    benchmark_parser.add_argument(
+        "--output-len", type=int, default=512, help="Output sequence length"
+    )
+    benchmark_parser.add_argument(
+        "--torch-profiler", action="store_true", default=True,
+        help="Enable torch profiler (default: enabled)"
+    )
+    benchmark_parser.add_argument(
+        "--no-torch-profiler", action="store_true",
+        help="Disable torch profiler"
+    )
+    benchmark_parser.add_argument(
+        "--system-profiler", action="store_true",
+        help="Enable system profiler (rocprof/ncu)"
+    )
+    benchmark_parser.add_argument(
+        "--docker-image", type=str, help="Override Docker image"
+    )
+    benchmark_parser.add_argument(
+        "--inferencemax-path", type=str,
+        default="/root/hao_workspace/InferenceMAX",
+        help="Path to InferenceMAX installation"
+    )
+    benchmark_parser.add_argument(
+        "--benchmark-script", type=str,
+        help="InferenceMAX benchmark script name"
+    )
+    benchmark_parser.add_argument(
+        "--timeout", type=int, default=3600, help="Benchmark timeout in seconds"
+    )
+    benchmark_parser.add_argument(
+        "--output-dir",
+        "-o",
+        type=Path,
+        default=Path("./results"),
+        help="Output directory",
+    )
+
     return parser
 
 
@@ -741,6 +908,8 @@ def main() -> int:
         return run_analyze(args, config)
     elif args.mode == "compare":
         return run_compare(args, config)
+    elif args.mode == "benchmark":
+        return run_benchmark(args, config)
     else:
         logger.error(f"Unknown mode: {args.mode}")
         return 1
