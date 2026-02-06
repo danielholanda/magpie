@@ -1,0 +1,40 @@
+# Test: Using InferenceMAX Native Script
+# ========================================
+# This config tests the benchmark_script lookup priority:
+#   Priority 1: User-specified script (this test)
+#
+# Usage:
+#   python -m Magpie benchmark --benchmark-config examples/test_inferencemax_script.yaml
+#
+# Expected: Should use dsr1_fp8_mi300x.sh from InferenceMAX
+
+benchmark:
+  framework: sglang
+  model: deepseek-ai/DeepSeek-R1-0528
+  precision: fp8
+  
+  # Environment variables
+  envs:
+    TP: 8
+    CONC: 32
+    ISL: 1024
+    OSL: 1024
+    RANDOM_RANGE_RATIO: 1
+    MAX_MODEL_LEN: 131072
+    
+  # Profiler configuration
+  profiler:
+    torch_profiler:
+      enabled: false
+    system_profiler:
+      enabled: false
+      
+  # InferenceMAX path (empty string will auto clone)
+  inferencemax_path: ""
+  
+  # TEST: Specify InferenceMAX native script directly
+  benchmark_script: "dsr1_fp8_mi300x.sh"
+  
+  # Timeout (DeepSeek-R1 needs time to load)
+  timeout_seconds: 3600
+
