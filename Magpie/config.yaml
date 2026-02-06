@@ -154,7 +154,9 @@ benchmark:
   image_config: "./benchmark_images.yaml"
   
   # Path to InferenceMAX installation
-  inferencemax_path: "YOUR_INFERENCEMAX_PATH"
+  # If not configured or path doesn't exist, InferenceMAX will be auto-cloned from:
+  # https://github.com/haofrank/InferenceMAX.git
+  inferencemax_path: ""
   
   # Default timeout for benchmark tasks
   timeout_seconds: 3600

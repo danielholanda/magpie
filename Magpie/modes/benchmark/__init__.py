@@ -17,6 +17,7 @@ from .benchmarker import BenchmarkMode
 from .result import BenchmarkResult
 from .workspace import WorkspaceManager
 from .image_selector import ImageSelector
+from .inferencemax import InferenceMAXManager, ensure_inferencemax_available
 
 __all__ = [
     "BenchmarkMode",
@@ -27,6 +28,9 @@ __all__ = [
     "SystemProfilerConfig",
     "WorkspaceManager",
     "ImageSelector",
+    "InferenceMAXManager",
+    "ensure_inferencemax_available",
 ]
+
 
 

@@ -11,6 +11,7 @@ Orchestrates benchmark execution using InferenceMAX as backend.
 
 import logging
 import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -18,6 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from .config import BenchmarkConfig
 from .image_selector import ImageSelector
+from .inferencemax import ensure_inferencemax_available
 from .workspace import WorkspaceManager
 from .result import BenchmarkResult, ResultParser
 
@@ -71,29 +73,54 @@ class BenchmarkMode:
         
         logger.info(f"Starting benchmark: {self.config.framework} / {self.config.model}")
         
-        # 1. Create workspace
-        workspace = self.workspace_mgr.create(self.config.to_dict())
+        # 0. Ensure InferenceMAX is available (auto-clone if needed)
+        try:
+            self.config.inferencemax_path = ensure_inferencemax_available(
+                self.config.inferencemax_path
+            )
+        except RuntimeError as e:
+            result = BenchmarkResult()
+            result.success = False
+            result.errors.append(f"Failed to setup InferenceMAX: {e}")
+            result.errors.append(f"Please clone manually: git clone https://github.com/haofrank/InferenceMAX.git")
+            return result
         
-        # 2. Select Docker image
-        docker_image = self._select_image()
+        # 1. Copy Magpie generic scripts to InferenceMAX/benchmarks/
+        self._prepare_benchmark_scripts()
         
-        # 3. Determine runner type and benchmark script
+        # 2. Determine runner type from GPU
         runner_type = self._get_runner_type()
         
-        # 4. Build Docker command
+        # 3. Find and validate benchmark script BEFORE container starts
+        try:
+            benchmark_script = self._get_benchmark_script(runner_type)
+            logger.info(f"Selected benchmark script: {benchmark_script}")
+        except FileNotFoundError as e:
+            result = BenchmarkResult()
+            result.success = False
+            result.errors.append(str(e))
+            return result
+        
+        # 4. Create workspace
+        workspace = self.workspace_mgr.create(self.config.to_dict())
+        
+        # 5. Select Docker image
+        docker_image = self._select_image()
+        
+        # 6. Build Docker command
         docker_cmd = self._build_docker_command(
             docker_image=docker_image,
             workspace=workspace,
             runner_type=runner_type,
         )
         
-        # 5. Execute benchmark
+        # 7. Execute benchmark
         logger.info(f"Running benchmark in container with image: {docker_image}")
         logger.debug(f"Docker command: {' '.join(docker_cmd)}")
         
         result, stdout, stderr = self._execute_benchmark(docker_cmd, workspace)
         
-        # 6. Collect results
+        # 8. Collect results
         result.workspace_dir = str(workspace)
         result.execution_time = time.time() - start_time
         result.framework = self.config.framework
@@ -154,6 +181,37 @@ class BenchmarkMode:
         if self.config.runner_type:
             return self.config.runner_type
         return self.image_selector.get_runner_type(self.config.gpu_arch)
+    
+    def _prepare_benchmark_scripts(self) -> None:
+        """
+        Copy Magpie generic benchmark scripts to InferenceMAX/benchmarks/.
+        
+        This allows using Magpie's generic scripts while still leveraging
+        InferenceMAX's benchmark_lib.sh and other utilities.
+        
+        Note: Won't overwrite existing files to preserve InferenceMAX native scripts.
+        """
+        # Magpie scripts location: Magpie/scripts/benchmark/
+        magpie_scripts = Path(__file__).parent.parent.parent / "scripts" / "benchmark"
+        target_dir = Path(self.config.inferencemax_path) / "benchmarks"
+        
+        if not magpie_scripts.exists():
+            logger.debug(f"Magpie scripts directory not found: {magpie_scripts}")
+            return
+        
+        # Ensure target directory exists
+        target_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Copy all .sh scripts (don't overwrite existing)
+        for script in magpie_scripts.glob("*.sh"):
+            target_file = target_dir / script.name
+            if not target_file.exists():
+                shutil.copy2(script, target_file)
+                # Make script executable
+                target_file.chmod(0o755)
+                logger.info(f"Copied Magpie script {script.name} to {target_dir}")
+            else:
+                logger.debug(f"Script {script.name} already exists in {target_dir}, skipping")
     
     def _validate_results(self, result: BenchmarkResult) -> bool:
         """
@@ -275,34 +333,63 @@ class BenchmarkMode:
     
     def _get_benchmark_script(self, runner_type: str) -> str:
         """
-        Get InferenceMAX benchmark script path.
+        Get InferenceMAX benchmark script path with 3-tier priority.
+        
+        Priority:
+            1. User-specified script (benchmark_script config) - must exist
+            2. InferenceMAX native scripts: {prefix}_{precision}_{runner}.sh
+               - sglang -> dsr1_
+               - vllm -> gptoss_
+            3. Magpie generic scripts: {framework}_{runner}.sh
         
         Args:
-            runner_type: Runner type (e.g., "mi300x", "h100")
+            runner_type: Runner type (e.g., "mi300x", "h100", "b200")
         
         Returns:
             Relative path to benchmark script
+            
+        Raises:
+            FileNotFoundError: If no suitable script found
         """
+        benchmarks_dir = Path(self.config.inferencemax_path) / "benchmarks"
+        
+        # Priority 1: User-specified script (must exist)
         if self.config.benchmark_script:
+            script_path = benchmarks_dir / self.config.benchmark_script
+            if not script_path.exists():
+                raise FileNotFoundError(
+                    f"Specified benchmark_script not found: {script_path}\n"
+                    f"Please ensure the file exists or remove the benchmark_script config."
+                )
+            logger.info(f"Using user-specified script: {self.config.benchmark_script}")
             return f"benchmarks/{self.config.benchmark_script}"
         
-        # Try to find matching script
-        # InferenceMAX convention: {exp_name}_{precision}_{runner}.sh
-        inferencemax_path = Path(self.config.inferencemax_path)
-        benchmarks_dir = inferencemax_path / "benchmarks"
+        # Priority 2: InferenceMAX native scripts
+        # Mapping: sglang -> dsr1_, vllm -> gptoss_
+        prefix_map = {"sglang": "dsr1", "vllm": "gptoss"}
+        prefix = prefix_map.get(self.config.framework)
         
-        if benchmarks_dir.exists():
-            # Look for scripts matching the runner
-            pattern = f"*_{self.config.precision}_{runner_type}.sh"
-            matches = list(benchmarks_dir.glob(pattern))
-            
-            if matches:
-                # Return first match
-                return f"benchmarks/{matches[0].name}"
+        if prefix:
+            native_script = f"{prefix}_{self.config.precision}_{runner_type}.sh"
+            if (benchmarks_dir / native_script).exists():
+                logger.info(f"Using InferenceMAX native script: {native_script}")
+                return f"benchmarks/{native_script}"
         
-        # Fallback: generic script name
-        logger.warning(f"No matching benchmark script found, using generic")
-        return f"benchmarks/generic_{self.config.precision}_{runner_type}.sh"
+        # Priority 3: Magpie generic scripts
+        generic_script = f"{self.config.framework}_{runner_type}.sh"
+        if (benchmarks_dir / generic_script).exists():
+            logger.info(f"Using Magpie generic script: {generic_script}")
+            return f"benchmarks/{generic_script}"
+        
+        # No script found - raise error with helpful message
+        raise FileNotFoundError(
+            f"No benchmark script found for framework={self.config.framework}, "
+            f"precision={self.config.precision}, gpu={runner_type}.\n"
+            f"Expected one of:\n"
+            f"  - {prefix}_{self.config.precision}_{runner_type}.sh (InferenceMAX native)\n"
+            f"  - {generic_script} (Magpie generic)\n"
+            f"Please create the script or specify benchmark_script in config."
+        )
     
     def _execute_benchmark(self, cmd: List[str], workspace: Path) -> tuple:
         """

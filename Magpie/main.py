@@ -645,7 +645,7 @@ def run_benchmark(args, config: Dict[str, Any]) -> int:
             },
             "profiler": {
                 "torch_profiler": {
-                    "enabled": not args.no_torch_profiler,
+                    "enabled": args.torch_profiler,
                 },
                 "system_profiler": {
                     "enabled": args.system_profiler,
@@ -665,11 +665,9 @@ def run_benchmark(args, config: Dict[str, Any]) -> int:
     # Get benchmark settings from framework config
     bench_settings = config.get("benchmark", {})
     
-    # Merge with framework config defaults
+    # Merge with framework config defaults (auto-clone handled in BenchmarkMode)
     if "inferencemax_path" not in benchmark_cfg or not benchmark_cfg["inferencemax_path"]:
-        benchmark_cfg["inferencemax_path"] = bench_settings.get(
-            "inferencemax_path", "/root/hao_workspace/InferenceMAX"
-        )
+        benchmark_cfg["inferencemax_path"] = bench_settings.get("inferencemax_path", "")
     
     # Create benchmark config object
     try:
@@ -841,12 +839,8 @@ def create_parser() -> argparse.ArgumentParser:
         "--output-len", type=int, default=512, help="Output sequence length"
     )
     benchmark_parser.add_argument(
-        "--torch-profiler", action="store_true", default=True,
-        help="Enable torch profiler (default: enabled)"
-    )
-    benchmark_parser.add_argument(
-        "--no-torch-profiler", action="store_true",
-        help="Disable torch profiler"
+        "--torch-profiler", action="store_true",
+        help="Enable torch profiler"
     )
     benchmark_parser.add_argument(
         "--system-profiler", action="store_true",
@@ -857,8 +851,8 @@ def create_parser() -> argparse.ArgumentParser:
     )
     benchmark_parser.add_argument(
         "--inferencemax-path", type=str,
-        default="/root/hao_workspace/InferenceMAX",
-        help="Path to InferenceMAX installation"
+        default="",
+        help="Path to InferenceMAX installation (auto-cloned if not specified)"
     )
     benchmark_parser.add_argument(
         "--benchmark-script", type=str,

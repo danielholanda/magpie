@@ -21,8 +21,9 @@ benchmark:
     CONC: 32                   # Request concurrency
     ISL: 1024                  # Input sequence length
     OSL: 1024                  # Output sequence length
-    RANDOM_RANGE_RATIO: 0.5    # Random range ratio for input/output length
+    RANDOM_RANGE_RATIO: 1    # Random range ratio for input/output length
     MAX_MODEL_LEN: 131072      # Maximum model length
+    ENABLE_PROFILIER: True     # Enable profiler
     
   # Profiler configuration
   profiler:
@@ -38,8 +39,8 @@ benchmark:
   # Optional: Override automatic image selection
   # docker_image: "lmsysorg/sglang:v0.5.8-rocm700-mi30x"
   
-  # InferenceMAX path
-  inferencemax_path: "/root/hao_workspace/InferenceMAX"
+  # Optional: InferenceMAX path
+  # inferencemax_path: "/YOUR_INFERENCEMAX_PATH/"
   
   # Optional: Specify benchmark script directly
   # benchmark_script: "dsr1_fp8_mi300x.sh"

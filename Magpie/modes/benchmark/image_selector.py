@@ -134,13 +134,15 @@ class ImageSelector:
         
         # Map GPU architectures to runner types
         arch_to_runner = {
-            # AMD
-            "gfx942": "mi300x",
-            "gfx950": "mi355x",
-            # NVIDIA
-            "sm_90": "h100",
-            "sm_80": "a100",
-            "sm_100": "b200",
+            # AMD GPUs
+            "gfx942": "mi300x",   # MI300X
+            "gfx950": "mi355x",   # MI355X
+            "gfx1100": "mi325x",  # MI325X
+            # NVIDIA GPUs
+            "sm_80": "a100",      # A100
+            "sm_90": "h100",      # H100
+            "sm_90a": "h200",     # H200
+            "sm_100": "b200",     # B200
         }
         
         runner = arch_to_runner.get(gpu_arch, None)
