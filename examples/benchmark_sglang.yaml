@@ -6,7 +6,6 @@
 #   python -m Magpie benchmark --benchmark-config examples/benchmark_sglang.yaml
 #
 # Prerequisites:
-#   - InferenceMAX cloned at the specified path
 #   - Docker with GPU support
 #   - HuggingFace token (HF_TOKEN) for gated models
 

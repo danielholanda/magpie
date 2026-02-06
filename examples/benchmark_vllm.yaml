@@ -1,0 +1,38 @@
+# vLLM Benchmark Configuration Example
+# =====================================
+# This example shows how to benchmark vLLM with DeepSeek-R1 model.
+#
+# Usage:
+#   python -m Magpie benchmark --benchmark-config examples/benchmark_vllm.yaml
+#
+# Prerequisites:
+#   - Docker with GPU support
+#   - HuggingFace token (HF_TOKEN) for gated models
+
+benchmark:
+  framework: vllm
+  model: deepseek-ai/DeepSeek-R1-0528
+  
+  # Environment variables
+  envs:
+    TP: 8
+    CONC: 32
+    ISL: 1024
+    OSL: 1024
+    RANDOM_RANGE_RATIO: 1
+    MAX_MODEL_LEN: 131072
+    
+  # Profiler configuration
+  profiler:
+    torch_profiler:
+      enabled: false
+    system_profiler:
+      enabled: false
+      
+  # Will auto-clone InferenceMAX if not specified
+  # inferencemax_path: ""
+  
+  # Auto-detect: will use Magpie generic script (vllm_mi300x.sh)
+  
+  # Timeout (DeepSeek-R1 needs time to load)
+  timeout_seconds: 3600
