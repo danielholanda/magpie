@@ -19,24 +19,46 @@ A lightweight, general-purpose framework for evaluating GPU kernel correctness a
 - `rocprof-compute` (AMD) or `ncu` (NVIDIA) if you enable performance profiling
 - Docker (required for Benchmark mode)
 
+## Installation
+
+### From GitHub (Recommended)
+
+```bash
+# Basic installation
+pip install git+https://github.com/AMD-AGI/Magpie.git
+
+```
+
+### From Source (Development)
+
+```bash
+git clone https://github.com/AMD-AGI/Magpie.git
+cd Magpie
+
+# Editable install (recommended for development)
+pip install -e .
+
+# Or use make
+make install
+```
+
 ## Quick Start
 
 ```bash
-# Install dependencies
-make install
-
 # Analyze a kernel using a config file
-python -m Magpie analyze --kernel-config Magpie/kernel_config.yaml.example
+magpie analyze --kernel-config Magpie/kernel_config.yaml.example
 
 # Compare kernels directly
-python -m Magpie compare kernel_v1.hip kernel_v2.hip
+magpie compare kernel_v1.hip kernel_v2.hip
 
 # Benchmark vLLM with torch profiling
-python -m Magpie benchmark --benchmark-config examples/benchmark_vllm.yaml
+magpie benchmark --benchmark-config examples/benchmark_vllm.yaml
 
 # Run MCP server
 python -m Magpie.mcp
 ```
+
+> **Note:** You can also use `python -m Magpie` instead of `magpie` command.
 
 ## Evaluation Modes
 
@@ -101,6 +123,7 @@ make format
 ├── README.md
 ├── LICENSE
 ├── .gitignore
+├── pyproject.toml       # Package configuration (pip install)
 ├── requirements.txt
 ├── Makefile
 ├── examples/            # Example configurations
