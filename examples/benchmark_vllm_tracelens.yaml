@@ -1,0 +1,55 @@
+# vLLM Benchmark with TraceLens Analysis
+# =======================================
+# Configuration for vLLM benchmarking with TraceLens trace analysis.
+#
+# Usage:
+#   python -m Magpie benchmark --benchmark-config examples/benchmark_vllm_tracelens.yaml
+#
+# Output:
+#   - Torch profiler traces: results/benchmark_vllm_<timestamp>/torch_trace/
+#   - TraceLens CSV reports: results/benchmark_vllm_<timestamp>/tracelens_rank0_csvs/
+#
+# Note: 
+#   - num_prompts = CONC * 10 (hardcoded in script), so CONC=4 gives 40 prompts
+#   - Smaller CONC/ISL/OSL values for faster profiling runs
+
+benchmark:
+  framework: vllm
+  model: deepseek-ai/DeepSeek-R1-0528
+  precision: fp8
+  
+  # Environment variables (optimized for fast profiling)
+  envs:
+    TP: 8                    # Tensor parallelism (adjust based on GPU count)
+    CONC: 4                  # Request concurrency (num_prompts = CONC * 10)
+    ISL: 128                 # Input sequence length
+    OSL: 64                  # Output sequence length
+    RANDOM_RANGE_RATIO: 1    # Fixed length (no randomness)
+    MAX_MODEL_LEN: 4096      # Reduced model length for faster loading
+    GPU_MEM_UTIL: 0.85       # GPU memory utilization (lower to avoid OOM)
+    ENABLE_PROFILE: "true"   # Enable torch profiler
+    
+  # Profiler configuration
+  profiler:
+    # PyTorch profiler - generates JSON traces
+    torch_profiler:
+      enabled: true          # This sets VLLM_TORCH_PROFILER_DIR
+      
+    # System profiler (rocprof-compute / ncu)
+    system_profiler:
+      enabled: false
+      
+    # TraceLens trace analysis - generates reports from torch traces
+    # Commands:
+    #   - TraceLens_generate_perf_report_pytorch (single rank)
+    #   - TraceLens_generate_multi_rank_collective_report_pytorch (multi-rank)
+    tracelens:
+      enabled: true               # Enable TraceLens analysis
+      export_format: csv          # "csv" or "excel"
+      perf_report_enabled: true   # Single-rank performance report
+      multi_rank_report_enabled: true   # Multi-rank collective report
+      # gpu_arch_config: null     # Optional: GPU arch config for roofline
+      
+  # Shorter timeout for minimal run
+  timeout_seconds: 1200
+

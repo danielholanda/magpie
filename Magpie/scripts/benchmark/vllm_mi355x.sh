@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 ###############################################################################
-# Magpie Generic vLLM Benchmark Script for MI355X
+# Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
+#
+# See LICENSE for license information.
 ###############################################################################
+
+# Magpie Generic vLLM Benchmark Script for MI355X
 
 source "$(dirname "$0")/benchmark_lib.sh"
 

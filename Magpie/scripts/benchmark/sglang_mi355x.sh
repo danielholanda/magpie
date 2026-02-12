@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 ###############################################################################
-# Magpie Generic SGLang Benchmark Script for MI355X
+# Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
+#
+# See LICENSE for license information.
 ###############################################################################
+
+# Magpie Generic SGLang Benchmark Script for MI355X
 
 source "$(dirname "$0")/benchmark_lib.sh"
 
@@ -66,4 +70,7 @@ if [ "${RUN_EVAL}" = "true" ]; then
     append_lm_eval_summary
 fi
 set +x
+
+
+
 

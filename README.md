@@ -4,10 +4,11 @@ A lightweight, general-purpose framework for evaluating GPU kernel correctness a
 
 ## Features
 
-- **Three Evaluation Modes**: Analyze, Compare, Benchmark (WIP)
+- **Three Evaluation Modes**: Analyze, Compare, Benchmark
 - **Heterogeneous Hardware**: AMD (HIP) and NVIDIA (CUDA) GPUs
-- **Execution Environments**: Local, Sandbox Container and Remote Ray Cluser
-- **Hardware Control**: hardware-aware kernel evaluation under controlled execution settings
+- **Execution Environments**: Local, Sandbox Container, and Remote Ray Cluster
+- **Hardware Control**: Hardware-aware kernel evaluation under controlled execution settings
+- **Trace Analysis**: TraceLens integration for performance profiling analysis
 - **MCP Server**: Model Context Protocol integration for AI agents
 - **Structured Reports**: JSON output for pipeline integration
 
@@ -16,6 +17,7 @@ A lightweight, general-purpose framework for evaluating GPU kernel correctness a
 - Python 3.10+
 - AMD ROCm (HIP) or NVIDIA CUDA toolchain (for kernel compilation/profiling)
 - `rocprof-compute` (AMD) or `ncu` (NVIDIA) if you enable performance profiling
+- Docker (required for Benchmark mode)
 
 ## Quick Start
 
@@ -29,6 +31,9 @@ python -m Magpie analyze --kernel-config Magpie/kernel_config.yaml.example
 # Compare kernels directly
 python -m Magpie compare kernel_v1.hip kernel_v2.hip
 
+# Benchmark vLLM with torch profiling
+python -m Magpie benchmark --benchmark-config examples/benchmark_vllm.yaml
+
 # Run MCP server
 python -m Magpie.mcp
 ```
@@ -39,7 +44,9 @@ python -m Magpie.mcp
 |------|-------------|--------|
 | **Analyze** | Single kernel evaluation with testcase | ✅ |
 | **Compare** | Multi-kernel comparison and ranking | ✅ |
-| **Benchmark** | Performance benchmarking suite | 🚧 WIP |
+| **Benchmark** | Framework-level benchmarking (vLLM/SGLang) with trace analysis | ✅ |
+
+> 📖 See [Benchmark Mode Documentation](docs/benchmark.md) for detailed usage.
 
 ## Configuration
 
@@ -55,11 +62,17 @@ Key categories:
 
 See [`Magpie/kernel_config.yaml.example`](./Magpie/kernel_config.yaml.example) for full examples.
 
-#### Example
+### Example Configs
 
 Example configs live in `examples/`:
-- Analyze (single kernel): `examples/ck_gemm_add.yaml`
-- Compare (multi-kernel): `examples/ck_grouped_gemm_compare.yaml`
+
+| Mode | Config File | Description |
+|------|-------------|-------------|
+| Analyze | `ck_gemm_add.yaml` | Single kernel evaluation |
+| Compare | `ck_grouped_gemm_compare.yaml` | Multi-kernel comparison |
+| Benchmark | `benchmark_vllm.yaml` | vLLM benchmark with profiling |
+| Benchmark | `benchmark_vllm_tracelens.yaml` | vLLM + TraceLens analysis |
+| Benchmark | `benchmark_sglang.yaml` | SGLang benchmark |
 
 ## MCP Server
 
@@ -91,23 +104,30 @@ make format
 ├── requirements.txt
 ├── Makefile
 ├── examples/            # Example configurations
+├── docs/                # Documentation
+│   └── benchmark.md     # Benchmark mode documentation
 └── Magpie/
     ├── __init__.py          # Package initialization
     ├── __main__.py          # Entry point for python -m Magpie
     ├── main.py              # CLI implementation
-    ├── config.yaml           # Framework configuration
+    ├── config.yaml          # Framework configuration
     ├── kernel_config.yaml.example
-    ├── config/               # Configuration classes
+    ├── config/              # Configuration classes
     ├── core/                # Core engine components
     ├── eval/                # Evaluation pipeline
     ├── modes/               # Evaluation modes
     │   ├── analyze_eval/    # Single kernel analysis
-    │   └── compare_eval/    # Multi-kernel comparison
+    │   ├── compare_eval/    # Multi-kernel comparison
+    │   └── benchmark/       # Framework-level benchmarking
+    │       ├── benchmarker.py   # Benchmark orchestration
+    │       ├── config.py        # Benchmark configuration
+    │       ├── tracelens.py     # TraceLens integration
+    │       └── result.py        # Result data structures
     ├── mcp/                 # MCP Server
     │   ├── __init__.py
     │   ├── __main__.py      # Entry point for python -m Magpie.mcp
     │   ├── server.py        # MCP server implementation
-    │   └── config.json       # MCP client configuration
+    │   └── config.json      # MCP client configuration
     └── utils/               # Utility functions
 ```
 

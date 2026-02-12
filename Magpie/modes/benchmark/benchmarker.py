@@ -22,6 +22,7 @@ from .image_selector import ImageSelector
 from .inferencemax import ensure_inferencemax_available
 from .workspace import WorkspaceManager
 from .result import BenchmarkResult, ResultParser
+from .tracelens import TraceLensAnalyzer
 
 from ...utils.gpu import detect_gpu, GPUVendor
 
@@ -158,7 +159,16 @@ class BenchmarkMode:
             torch_trace_dir = workspace / "torch_trace"
             kernels = ResultParser.parse_torch_trace(torch_trace_dir)
             result.kernel_summary = kernels
+            # Get top 10 bottlenecks
             result.top_bottlenecks = [k.name for k in kernels[:10]]
+            
+            # Run TraceLens analysis if enabled
+            # Note: TraceLens runs on the HOST (not in container) after benchmark completes.
+            if self.config.profiler.tracelens.enabled:
+                tracelens_result = self._run_tracelens_analysis(
+                    torch_trace_dir, workspace
+                )
+                result.tracelens_analysis = tracelens_result
         
         # Save report
         self.workspace_mgr.save_report(result.to_dict())
@@ -487,6 +497,54 @@ class BenchmarkMode:
                 logger.debug(f"Saved container stderr to {stderr_file}")
         except Exception as e:
             logger.warning(f"Failed to save container logs: {e}")
+    
+    def _run_tracelens_analysis(
+        self,
+        torch_trace_dir: Path,
+        workspace: Path,
+    ) -> Dict[str, Any]:
+        """
+        Run TraceLens analysis on torch profiler traces.
+        
+        NOTE: This runs on the HOST machine (not in container) after the
+        Docker benchmark completes. TraceLens will be auto-installed from
+        https://github.com/AMD-AIG-AIMA/TraceLens.git if not present.
+        
+        Args:
+            torch_trace_dir: Directory containing torch trace files
+            workspace: Workspace directory for output
+        
+        Returns:
+            TraceLens analysis results dictionary
+        """
+        logger.info("Running TraceLens analysis on host...")
+        
+        try:
+            analyzer = TraceLensAnalyzer(self.config.profiler.tracelens)
+            
+            # Get number of ranks from TP config
+            num_ranks = int(self.config.envs.get("TP", 8))
+            
+            results = analyzer.analyze(
+                trace_dir=torch_trace_dir,
+                output_dir=workspace,
+                num_ranks=num_ranks,
+            )
+            
+            if results.get("output_files"):
+                logger.info(
+                    f"TraceLens analysis complete: {len(results['output_files'])} output files"
+                )
+            
+            if results.get("errors"):
+                for error in results["errors"]:
+                    logger.warning(f"TraceLens warning: {error}")
+            
+            return results
+            
+        except Exception as e:
+            logger.exception(f"TraceLens analysis failed: {e}")
+            return {"enabled": True, "error": str(e)}
     
     def cleanup(self) -> None:
         """Clean up resources."""

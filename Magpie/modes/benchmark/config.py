@@ -18,6 +18,12 @@ class BenchmarkFramework(Enum):
     SGLANG = "sglang"
 
 
+class TraceLensExportFormat(Enum):
+    """TraceLens export format options."""
+    CSV = "csv"
+    EXCEL = "excel"
+
+
 @dataclass
 class TorchProfilerConfig:
     """
@@ -67,6 +73,90 @@ class SystemProfilerConfig:
 
 
 @dataclass
+class TraceLensConfig:
+    """
+    TraceLens trace analysis configuration.
+    
+    Supports two CLI commands:
+    - TraceLens_generate_perf_report_pytorch: Single rank performance report
+    - TraceLens_generate_multi_rank_collective_report_pytorch: Multi-rank collective analysis
+    
+    Attributes:
+        enabled: Master switch for TraceLens analysis (default: False)
+        export_format: Export format - "csv" or "excel" (default: "csv")
+        perf_report_enabled: Enable single-rank performance report (default: True)
+        multi_rank_report_enabled: Enable multi-rank collective report (default: True)
+        gpu_arch_config: Path to GPU architecture JSON config for roofline (optional)
+    """
+    enabled: bool = False
+    export_format: str = "csv"  # "csv" or "excel"
+    
+    # Command-specific enable/disable
+    perf_report_enabled: bool = True
+    multi_rank_report_enabled: bool = True
+    
+    # GPU architecture config (for roofline analysis)
+    gpu_arch_config: Optional[str] = None
+    
+    def __post_init__(self):
+        """Validate export format."""
+        if self.export_format not in ["csv", "excel"]:
+            raise ValueError(f"Invalid export_format: {self.export_format}. Use 'csv' or 'excel'.")
+    
+    @property
+    def export_csv(self) -> bool:
+        """Check if CSV export is enabled."""
+        return self.export_format == "csv"
+    
+    @property
+    def export_excel(self) -> bool:
+        """Check if Excel export is enabled."""
+        return self.export_format == "excel"
+    
+    # Internal defaults (not exposed to user config)
+    # These follow TraceLens CLI defaults
+    @property
+    def collective_analysis(self) -> bool:
+        """Collective analysis is enabled by default in TraceLens."""
+        return True
+    
+    @property
+    def short_kernel_study(self) -> bool:
+        """Short kernel study is disabled by default in TraceLens."""
+        return False
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            "enabled": self.enabled,
+            "export_format": self.export_format,
+            "perf_report_enabled": self.perf_report_enabled,
+            "multi_rank_report_enabled": self.multi_rank_report_enabled,
+            "gpu_arch_config": self.gpu_arch_config,
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "TraceLensConfig":
+        """Create from dictionary."""
+        # Handle legacy config format
+        export_format = data.get("export_format", "csv")
+        if "export_csv" in data and "export_format" not in data:
+            # Legacy: export_csv=True means csv, export_excel=True means excel
+            if data.get("export_excel", False):
+                export_format = "excel"
+            else:
+                export_format = "csv"
+        
+        return cls(
+            enabled=data.get("enabled", False),
+            export_format=export_format,
+            perf_report_enabled=data.get("perf_report_enabled", True),
+            multi_rank_report_enabled=data.get("multi_rank_report_enabled", True),
+            gpu_arch_config=data.get("gpu_arch_config"),
+        )
+
+
+@dataclass
 class ProfilerConfig:
     """
     Complete profiler configuration.
@@ -74,15 +164,18 @@ class ProfilerConfig:
     Attributes:
         torch_profiler: PyTorch profiler settings (default enabled)
         system_profiler: System profiler settings (default disabled)
+        tracelens: TraceLens trace analysis settings (default disabled)
     """
     torch_profiler: TorchProfilerConfig = field(default_factory=TorchProfilerConfig)
     system_profiler: SystemProfilerConfig = field(default_factory=SystemProfilerConfig)
+    tracelens: TraceLensConfig = field(default_factory=TraceLensConfig)
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
             "torch_profiler": self.torch_profiler.to_dict(),
             "system_profiler": self.system_profiler.to_dict(),
+            "tracelens": self.tracelens.to_dict(),
         }
     
     @classmethod
@@ -90,9 +183,11 @@ class ProfilerConfig:
         """Create from dictionary."""
         torch_cfg = data.get("torch_profiler", {})
         sys_cfg = data.get("system_profiler", {})
+        tracelens_cfg = data.get("tracelens", {})
         return cls(
             torch_profiler=TorchProfilerConfig.from_dict(torch_cfg) if torch_cfg else TorchProfilerConfig(),
             system_profiler=SystemProfilerConfig.from_dict(sys_cfg) if sys_cfg else SystemProfilerConfig(),
+            tracelens=TraceLensConfig.from_dict(tracelens_cfg) if tracelens_cfg else TraceLensConfig(),
         )
 
 

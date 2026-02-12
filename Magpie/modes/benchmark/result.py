@@ -137,6 +137,9 @@ class BenchmarkResult:
     kernel_summary: List[KernelMetrics] = field(default_factory=list)
     top_bottlenecks: List[str] = field(default_factory=list)
     
+    # TraceLens analysis results
+    tracelens_analysis: Optional[Dict[str, Any]] = None
+    
     # Execution info
     workspace_dir: str = ""
     execution_time: float = 0.0
@@ -157,6 +160,7 @@ class BenchmarkResult:
             "latency": self.latency.to_dict() if self.latency else None,
             "kernel_summary": [k.to_dict() for k in self.kernel_summary],
             "top_bottlenecks": self.top_bottlenecks,
+            "tracelens_analysis": self.tracelens_analysis,
             "workspace_dir": self.workspace_dir,
             "execution_time": self.execution_time,
             "errors": self.errors,
@@ -200,6 +204,22 @@ class BenchmarkResult:
             ])
             for i, kernel in enumerate(self.top_bottlenecks[:5], 1):
                 lines.append(f"  {i}. {kernel}")
+        
+        if self.tracelens_analysis:
+            lines.extend([
+                "",
+                "TraceLens Analysis:",
+            ])
+            if self.tracelens_analysis.get("output_files"):
+                lines.append(f"  Output files: {len(self.tracelens_analysis['output_files'])}")
+                # Show first few files
+                for f in self.tracelens_analysis["output_files"][:3]:
+                    lines.append(f"    - {Path(f).name}")
+                if len(self.tracelens_analysis["output_files"]) > 3:
+                    lines.append(f"    ... and {len(self.tracelens_analysis['output_files']) - 3} more")
+            if self.tracelens_analysis.get("errors"):
+                for err in self.tracelens_analysis["errors"]:
+                    lines.append(f"  Warning: {err}")
         
         if self.errors:
             lines.extend([
