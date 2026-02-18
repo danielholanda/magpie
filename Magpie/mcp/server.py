@@ -10,13 +10,21 @@ Magpie MCP Server
 Single MCP server that exposes multiple GPU kernel evaluation tools.
 Tools are automatically discovered by MCP clients.
 
-Tools:
+Kernel Tools:
   - hardware_spec: Get GPU hardware specifications
   - analyze: Analyze kernel correctness and performance
   - compare: Compare multiple kernels
   - configure_gpu: Configure GPU power/frequency settings
   - discover_kernels: Discover analyzable kernels in a project
   - suggest_optimizations: Get optimization suggestions based on analysis results
+  - create_kernel_config: Generate kernel config YAML for CLI use
+
+Benchmark Tools:
+  - benchmark: Run vLLM/SGLang framework benchmark in Docker
+  - list_benchmark_images: List available Docker images per framework/arch
+  - list_benchmark_results: List previous benchmark workspaces and summaries
+  - get_benchmark_result: Read detailed results from a specific benchmark run
+  - compare_benchmark_reports: Compare TraceLens reports across benchmark runs
 
 Usage:
     python -m Magpie.mcp
@@ -1053,6 +1061,484 @@ def create_kernel_config(
         return json.dumps(result, indent=2)
 
     except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+# =============================================================================
+# Tool 8: benchmark
+# =============================================================================
+@mcp.tool()
+def benchmark(
+    framework: str,
+    model: str,
+    precision: str = "fp8",
+    tp: int = 1,
+    concurrency: int = 32,
+    input_len: int = 1024,
+    output_len: int = 512,
+    torch_profiler: bool = True,
+    tracelens: bool = False,
+    tracelens_export_format: str = "csv",
+    docker_image: Optional[str] = None,
+    gpu_arch: Optional[str] = None,
+    inferencemax_path: str = "",
+    hf_cache_path: Optional[str] = None,
+    benchmark_script: Optional[str] = None,
+    runner_type: Optional[str] = None,
+    timeout_seconds: float = 3600.0,
+    output_dir: str = "./results",
+    extra_envs: Optional[Dict[str, Any]] = None,
+) -> str:
+    """
+    Run a framework-level LLM inference benchmark (vLLM or SGLang).
+
+    Launches the inference server inside a Docker container using InferenceMAX
+    scripts, runs a benchmark client, and collects throughput/latency metrics.
+    Optionally collects torch profiler traces and runs TraceLens analysis.
+
+    InferenceMAX is auto-cloned if not present.
+
+    Args:
+        framework: "vllm" or "sglang"
+        model: HuggingFace model name (e.g., "deepseek-ai/DeepSeek-R1-0528")
+        precision: Model precision - "fp8", "fp16", "bf16", or "fp4" (default: "fp8")
+        tp: Tensor parallelism / number of GPUs (default: 1)
+        concurrency: Request concurrency (default: 32)
+        input_len: Input sequence length (default: 1024)
+        output_len: Output sequence length (default: 512)
+        torch_profiler: Enable PyTorch profiler traces (default: True)
+        tracelens: Enable TraceLens trace analysis on host after benchmark (default: False)
+        tracelens_export_format: TraceLens export format - "csv" or "excel" (default: "csv")
+        docker_image: Override automatic Docker image selection (optional)
+        gpu_arch: Force GPU architecture, e.g. "gfx942" (auto-detected if omitted)
+        inferencemax_path: Path to InferenceMAX installation (auto-cloned if empty)
+        hf_cache_path: HuggingFace cache directory (default: ~/.cache/huggingface)
+        benchmark_script: Override benchmark script name (e.g., "dsr1_fp8_mi300x.sh")
+        runner_type: Hardware runner type (e.g., "mi300x", "h100") - auto-detected if omitted
+        timeout_seconds: Benchmark timeout in seconds (default: 3600)
+        output_dir: Base directory for results (default: "./results")
+        extra_envs: Additional environment variables passed to the Docker container
+
+    Returns:
+        JSON with benchmark results including:
+        - success: bool
+        - framework, model: identifiers
+        - throughput: request_throughput (req/s), output_throughput (tok/s), etc.
+        - latency: TTFT, TPOT, ITL, E2EL (mean/median/p99/std in ms)
+        - kernel_summary: top GPU kernels by time
+        - top_bottlenecks: names of top 10 bottleneck kernels
+        - tracelens_analysis: TraceLens output files (if enabled)
+        - workspace_dir: path to all output files
+        - execution_time: total wall time in seconds
+        - errors: list of error messages (if any)
+    """
+    from ..modes.benchmark import BenchmarkMode, BenchmarkConfig
+
+    try:
+        envs: Dict[str, Any] = {
+            "TP": tp,
+            "CONC": concurrency,
+            "ISL": input_len,
+            "OSL": output_len,
+            "RANDOM_RANGE_RATIO": 0.5,
+        }
+        if extra_envs:
+            envs.update(extra_envs)
+
+        profiler_cfg = {
+            "torch_profiler": {"enabled": torch_profiler},
+            "system_profiler": {"enabled": False},
+            "tracelens": {
+                "enabled": tracelens,
+                "export_format": tracelens_export_format,
+                "perf_report_enabled": True,
+                "multi_rank_report_enabled": tp > 1,
+            },
+        }
+
+        config_dict = {
+            "framework": framework,
+            "model": model,
+            "precision": precision,
+            "envs": envs,
+            "profiler": profiler_cfg,
+            "docker_image": docker_image,
+            "gpu_arch": gpu_arch,
+            "timeout_seconds": timeout_seconds,
+            "inferencemax_path": inferencemax_path,
+            "hf_cache_path": hf_cache_path,
+            "benchmark_script": benchmark_script,
+            "runner_type": runner_type,
+        }
+
+        benchmark_config = BenchmarkConfig.from_dict(config_dict)
+
+        benchmarker = BenchmarkMode(
+            config=benchmark_config,
+            output_dir=output_dir,
+        )
+
+        result = benchmarker.run()
+
+        response = result.to_dict()
+        response["summary_text"] = result.get_summary()
+        return json.dumps(response, indent=2)
+
+    except Exception as e:
+        logger.exception(f"Benchmark failed: {e}")
+        return json.dumps({
+            "error": str(e),
+            "framework": framework,
+            "model": model,
+        })
+
+
+# =============================================================================
+# Tool 9: list_benchmark_images
+# =============================================================================
+@mcp.tool()
+def list_benchmark_images(
+    framework: Optional[str] = None,
+) -> str:
+    """
+    List available Docker images for benchmarking.
+
+    Shows the framework -> GPU architecture -> Docker image mapping used
+    by benchmark mode to auto-select containers.
+
+    Args:
+        framework: Filter by framework ("vllm" or "sglang"). If None, list all.
+
+    Returns:
+        JSON with image mapping: { framework: { gpu_arch: docker_image } }
+    """
+    from ..modes.benchmark import ImageSelector
+
+    try:
+        selector = ImageSelector()
+        images = selector.list_available_images(framework=framework)
+
+        runner_info = {}
+        for fw, arch_map in images.items():
+            runner_info[fw] = {}
+            for arch, image in arch_map.items():
+                try:
+                    runner = selector.get_runner_type(arch)
+                except (ValueError, Exception):
+                    runner = "unknown"
+                runner_info[fw][arch] = {
+                    "image": image,
+                    "runner_type": runner,
+                }
+
+        return json.dumps({
+            "images": images,
+            "details": runner_info,
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+# =============================================================================
+# Tool 10: list_benchmark_results
+# =============================================================================
+@mcp.tool()
+def list_benchmark_results(
+    output_dir: str = "./results",
+    limit: int = 20,
+) -> str:
+    """
+    List previous benchmark runs and their summary results.
+
+    Scans the output directory for benchmark workspaces and returns a
+    summary of each run (framework, model, status, throughput, latency).
+
+    Args:
+        output_dir: Base directory where benchmark results are stored (default: "./results")
+        limit: Maximum number of results to return, most recent first (default: 20)
+
+    Returns:
+        JSON with list of benchmark runs, each containing:
+        - workspace: directory path
+        - timestamp: extracted from directory name
+        - framework: vllm or sglang
+        - config: benchmark configuration snapshot
+        - metrics: throughput and latency summary (if available)
+        - has_torch_trace: whether torch traces exist
+        - has_tracelens: whether TraceLens output exists
+    """
+    from ..modes.benchmark import WorkspaceManager
+
+    try:
+        workspaces = WorkspaceManager.list_workspaces(base_dir=output_dir)
+        runs = []
+
+        for ws_path in workspaces[:limit]:
+            ws = Path(ws_path)
+            entry: Dict[str, Any] = {
+                "workspace": str(ws),
+                "name": ws.name,
+            }
+
+            # Extract framework and timestamp from directory name
+            # Format: benchmark_{framework}_{timestamp}
+            parts = ws.name.split("_", 2)
+            if len(parts) >= 3:
+                entry["framework"] = parts[1]
+                entry["timestamp"] = parts[2]
+
+            # Read config snapshot
+            config_file = ws / "config.yaml"
+            if config_file.exists():
+                try:
+                    with open(config_file) as f:
+                        entry["config"] = yaml.safe_load(f) or {}
+                except Exception:
+                    entry["config"] = None
+
+            # Read benchmark report for summary metrics
+            report_file = ws / "benchmark_report.json"
+            if report_file.exists():
+                try:
+                    with open(report_file) as f:
+                        report = json.load(f)
+                    entry["success"] = report.get("success", False)
+                    entry["model"] = report.get("model", "")
+                    entry["execution_time"] = report.get("execution_time", 0)
+                    entry["throughput"] = report.get("throughput")
+                    entry["latency"] = report.get("latency")
+                    entry["top_bottlenecks"] = report.get("top_bottlenecks", [])[:5]
+                    entry["errors"] = report.get("errors", [])
+                except Exception:
+                    entry["report_error"] = "Failed to parse benchmark_report.json"
+            else:
+                entry["success"] = None
+
+            # Check for trace and analysis artifacts
+            entry["has_torch_trace"] = (ws / "torch_trace").exists() and any(
+                (ws / "torch_trace").iterdir()
+            ) if (ws / "torch_trace").exists() else False
+            entry["has_tracelens"] = (
+                (ws / "tracelens_rank0_csvs").exists()
+                or (ws / "tracelens_collective_csvs").exists()
+            )
+
+            runs.append(entry)
+
+        return json.dumps({
+            "output_dir": output_dir,
+            "total_found": len(workspaces),
+            "showing": len(runs),
+            "runs": runs,
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+# =============================================================================
+# Tool 11: get_benchmark_result
+# =============================================================================
+@mcp.tool()
+def get_benchmark_result(
+    workspace_dir: str,
+    include_kernel_summary: bool = True,
+    include_raw_result: bool = False,
+    include_tracelens_files: bool = True,
+) -> str:
+    """
+    Read detailed results from a specific benchmark run.
+
+    Loads all available data from a benchmark workspace directory
+    including the report, config, kernel summary, and TraceLens output file listing.
+
+    Args:
+        workspace_dir: Path to the benchmark workspace directory
+        include_kernel_summary: Include per-kernel profiling breakdown (default: True)
+        include_raw_result: Include raw InferenceMAX JSON output (default: False)
+        include_tracelens_files: List TraceLens output files (default: True)
+
+    Returns:
+        JSON with full benchmark details:
+        - config: benchmark configuration
+        - success, framework, model
+        - throughput, latency metrics
+        - kernel_summary: per-kernel time/percentage/calls
+        - tracelens_files: list of TraceLens output file paths
+        - errors
+    """
+    try:
+        ws = Path(workspace_dir)
+        if not ws.exists():
+            return json.dumps({"error": f"Workspace not found: {workspace_dir}"})
+
+        result: Dict[str, Any] = {"workspace": str(ws)}
+
+        # Load config
+        config_file = ws / "config.yaml"
+        if config_file.exists():
+            with open(config_file) as f:
+                result["config"] = yaml.safe_load(f)
+
+        # Load main report
+        report_file = ws / "benchmark_report.json"
+        if report_file.exists():
+            with open(report_file) as f:
+                report = json.load(f)
+
+            result["success"] = report.get("success", False)
+            result["framework"] = report.get("framework", "")
+            result["model"] = report.get("model", "")
+            result["execution_time"] = report.get("execution_time", 0)
+            result["throughput"] = report.get("throughput")
+            result["latency"] = report.get("latency")
+            result["top_bottlenecks"] = report.get("top_bottlenecks", [])
+            result["errors"] = report.get("errors", [])
+
+            if include_kernel_summary:
+                result["kernel_summary"] = report.get("kernel_summary", [])
+
+            if include_raw_result:
+                # Load raw InferenceMAX result
+                raw_file = ws / "inferencemax_result.json"
+                if raw_file.exists():
+                    with open(raw_file) as f:
+                        result["raw_inferencemax_result"] = json.load(f)
+        else:
+            result["error"] = "benchmark_report.json not found in workspace"
+
+        # Load summary text
+        summary_file = ws / "summary.txt"
+        if summary_file.exists():
+            with open(summary_file) as f:
+                result["summary_text"] = f.read()
+
+        # List TraceLens outputs
+        if include_tracelens_files:
+            tracelens_files: Dict[str, List[str]] = {}
+
+            rank0_dir = ws / "tracelens_rank0_csvs"
+            if rank0_dir.exists():
+                tracelens_files["rank0_csvs"] = sorted(
+                    str(f) for f in rank0_dir.iterdir() if f.is_file()
+                )
+
+            collective_dir = ws / "tracelens_collective_csvs"
+            if collective_dir.exists():
+                tracelens_files["collective_csvs"] = sorted(
+                    str(f) for f in collective_dir.iterdir() if f.is_file()
+                )
+
+            if tracelens_files:
+                result["tracelens_files"] = tracelens_files
+
+        # List torch trace files
+        trace_dir = ws / "torch_trace"
+        if trace_dir.exists():
+            result["torch_trace_files"] = sorted(
+                str(f) for f in trace_dir.iterdir() if f.is_file()
+            )
+
+        return json.dumps(result, indent=2)
+
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+# =============================================================================
+# Tool 12: compare_benchmark_reports
+# =============================================================================
+@mcp.tool()
+def compare_benchmark_reports(
+    workspace_dirs: List[str],
+    labels: Optional[List[str]] = None,
+    output_dir: str = "./results/comparisons",
+    export_format: str = "csv",
+) -> str:
+    """
+    Compare TraceLens performance reports from multiple benchmark runs.
+
+    Uses TraceLens_compare_perf_reports_pytorch to generate a side-by-side
+    comparison of kernel-level performance across different benchmark runs.
+    Useful for A/B testing framework versions, models, or configurations.
+
+    Requires at least 2 benchmark workspaces that have TraceLens rank0 CSV output.
+
+    Args:
+        workspace_dirs: List of benchmark workspace directories to compare (minimum 2)
+        labels: Display labels for each run (e.g., ["baseline", "optimized"]).
+                If None, workspace directory names are used.
+        output_dir: Directory for comparison output files (default: "./results/comparisons")
+        export_format: "csv" or "excel" (default: "csv")
+
+    Returns:
+        JSON with comparison results:
+        - output_files: list of generated comparison CSV/Excel files
+        - run_summaries: throughput/latency summary for each run
+        - errors: any errors during comparison
+    """
+    from ..modes.benchmark.config import TraceLensConfig
+    from ..modes.benchmark.tracelens import TraceLensAnalyzer
+
+    try:
+        if len(workspace_dirs) < 2:
+            return json.dumps({"error": "At least 2 workspace directories required"})
+
+        # Validate workspaces and collect summaries
+        report_dirs = []
+        run_summaries = []
+        for i, ws_path in enumerate(workspace_dirs):
+            ws = Path(ws_path)
+            rank0_dir = ws / "tracelens_rank0_csvs"
+            if not rank0_dir.exists():
+                return json.dumps({
+                    "error": f"No TraceLens rank0 CSVs found in {ws_path}. "
+                             f"Run benchmark with tracelens=True first.",
+                })
+            report_dirs.append(rank0_dir)
+
+            # Collect summary for context
+            summary: Dict[str, Any] = {
+                "workspace": str(ws),
+                "label": labels[i] if labels and i < len(labels) else ws.name,
+            }
+            report_file = ws / "benchmark_report.json"
+            if report_file.exists():
+                with open(report_file) as f:
+                    report = json.load(f)
+                summary["framework"] = report.get("framework", "")
+                summary["model"] = report.get("model", "")
+                summary["throughput"] = report.get("throughput")
+                summary["latency"] = report.get("latency")
+            run_summaries.append(summary)
+
+        # Create TraceLens config for comparison
+        tl_config = TraceLensConfig(
+            enabled=True,
+            export_format=export_format,
+        )
+
+        analyzer = TraceLensAnalyzer(tl_config)
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        comparison = analyzer.compare_reports(
+            report_dirs=report_dirs,
+            output_dir=output_path,
+            labels=labels or [ws.name for ws in (Path(d) for d in workspace_dirs)],
+        )
+
+        return json.dumps({
+            "success": comparison.get("error") is None,
+            "output_dir": str(output_path),
+            "output_files": comparison.get("files", []),
+            "run_summaries": run_summaries,
+            "errors": [comparison["error"]] if comparison.get("error") else [],
+        }, indent=2)
+
+    except Exception as e:
+        logger.exception(f"Benchmark comparison failed: {e}")
         return json.dumps({"error": str(e)})
 
 
