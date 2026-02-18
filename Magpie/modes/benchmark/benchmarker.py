@@ -327,15 +327,16 @@ class BenchmarkMode:
         # Working directory
         cmd.extend(["-w", "/workspace/InferenceMAX"])
         
-        # Image and entrypoint
+        # Image and entrypoint - always override to bash for script compatibility
+        cmd.extend(["--entrypoint", "/bin/bash"])
         cmd.append(docker_image)
         
         # Build the benchmark command
         benchmark_script = self._get_benchmark_script(runner_type)
         
-        # Use bash to run the benchmark
+        # With --entrypoint /bin/bash, pass -c as first arg
         cmd.extend([
-            "/bin/bash", "-c",
+            "-c",
             f"cd /workspace/InferenceMAX && bash {benchmark_script}"
         ])
         
