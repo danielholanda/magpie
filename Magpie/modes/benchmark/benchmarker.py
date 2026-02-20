@@ -312,6 +312,7 @@ class BenchmarkMode:
         
         # torch_profiler environment
         if self.config.profiler.torch_profiler.enabled:
+            env_vars["ENABLE_PROFILE"] = "true"
             env_vars["VLLM_TORCH_PROFILER_DIR"] = "/workspace/output/torch_trace"
             env_vars["SGLANG_TORCH_PROFILER_DIR"] = "/workspace/output/torch_trace"
 
