@@ -169,6 +169,11 @@ class BenchmarkMode:
                     torch_trace_dir, workspace
                 )
                 result.tracelens_analysis = tracelens_result
+            
+            # Run gap analysis if enabled
+            if self.config.gap_analysis.enabled:
+                gap_result = self._run_gap_analysis(torch_trace_dir, workspace)
+                result.gap_analysis = gap_result
         
         # Save report
         self.workspace_mgr.save_report(result.to_dict())
@@ -546,6 +551,63 @@ class BenchmarkMode:
             
         except Exception as e:
             logger.exception(f"TraceLens analysis failed: {e}")
+            return {"enabled": True, "error": str(e)}
+    
+    def _run_gap_analysis(
+        self,
+        torch_trace_dir: Path,
+        workspace: Path,
+    ) -> Dict[str, Any]:
+        """
+        Run gap analysis on torch profiler traces.
+        
+        Analyzes a time window of the trace to identify kernel-level
+        bottlenecks and writes a CSV report.
+        
+        Args:
+            torch_trace_dir: Directory containing torch trace files
+            workspace: Workspace directory for output
+        
+        Returns:
+            Gap analysis results dictionary
+        """
+        from .gap_analysis import GapAnalyzer
+
+        logger.info("Running gap analysis on torch traces...")
+        
+        try:
+            gap_dir = workspace / "gap_analysis"
+            gap_dir.mkdir(parents=True, exist_ok=True)
+
+            analyzer = GapAnalyzer(self.config.gap_analysis)
+            result = analyzer.analyze(torch_trace_dir)
+            
+            # Write merged CSV
+            csv_path = gap_dir / "gap_analysis.csv"
+            result.to_csv(csv_path)
+            logger.info(f"Wrote gap analysis CSV: {csv_path}")
+            
+            # Write per-rank CSVs if multiple ranks
+            if len(result.rank_results) > 1:
+                rank_paths = result.to_rank_csv(gap_dir)
+                for rp in rank_paths:
+                    logger.info(f"Wrote per-rank CSV: {rp}")
+            
+            ga_dict = result.to_dict()
+            ga_dict["csv_path"] = str(csv_path)
+            ga_dict["output_dir"] = str(gap_dir)
+            
+            if result.errors:
+                for err in result.errors:
+                    logger.warning(f"Gap analysis warning: {err}")
+            else:
+                n = len(result.merged_kernels)
+                logger.info(f"Gap analysis complete: {n} kernels in CSV")
+            
+            return ga_dict
+            
+        except Exception as e:
+            logger.exception(f"Gap analysis failed: {e}")
             return {"enabled": True, "error": str(e)}
     
     def cleanup(self) -> None:

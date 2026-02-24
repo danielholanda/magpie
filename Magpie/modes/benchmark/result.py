@@ -140,6 +140,9 @@ class BenchmarkResult:
     # TraceLens analysis results
     tracelens_analysis: Optional[Dict[str, Any]] = None
     
+    # Gap analysis results
+    gap_analysis: Optional[Dict[str, Any]] = None
+    
     # Execution info
     workspace_dir: str = ""
     execution_time: float = 0.0
@@ -161,6 +164,7 @@ class BenchmarkResult:
             "kernel_summary": [k.to_dict() for k in self.kernel_summary],
             "top_bottlenecks": self.top_bottlenecks,
             "tracelens_analysis": self.tracelens_analysis,
+            "gap_analysis": self.gap_analysis,
             "workspace_dir": self.workspace_dir,
             "execution_time": self.execution_time,
             "errors": self.errors,
@@ -221,6 +225,28 @@ class BenchmarkResult:
                 for err in self.tracelens_analysis["errors"]:
                     lines.append(f"  Warning: {err}")
         
+        if self.gap_analysis:
+            lines.extend(["", "Gap Analysis:"])
+            ga = self.gap_analysis
+            cfg = ga.get("config", {})
+            start_pct = cfg.get("trace_start_pct", 0)
+            end_pct = cfg.get("trace_end_pct", 100)
+            lines.append(f"  Window: {start_pct}%-{end_pct}%")
+            cats = cfg.get("categories")
+            if cats:
+                lines.append(f"  Categories: {', '.join(cats)}")
+            top_kernels = ga.get("top_kernels", [])
+            if top_kernels:
+                for i, k in enumerate(top_kernels[:5], 1):
+                    lines.append(
+                        f"  {i}. {k['name']} - "
+                        f"{k.get('pct_total', 0):.1f}% "
+                        f"({k.get('self_cuda_total_us', 0):.2f}us, "
+                        f"{k.get('calls', 0)} calls)"
+                    )
+                if len(top_kernels) > 5:
+                    lines.append(f"  ... and {len(top_kernels) - 5} more")
+
         if self.errors:
             lines.extend([
                 "",

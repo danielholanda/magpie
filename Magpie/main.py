@@ -617,10 +617,84 @@ def load_benchmark_config(benchmark_config_path: Path) -> Dict[str, Any]:
     return data.get("benchmark", {})
 
 
+def run_gap_analysis_standalone(args) -> int:
+    """Run standalone gap analysis on existing torch traces."""
+    from .modes.benchmark.gap_analysis import GapAnalyzer
+    from .modes.benchmark.config import GapAnalysisConfig
+
+    trace_dir = args.trace_dir.resolve()
+
+    # Auto-detect: if user passed a workspace dir, look for torch_trace/ inside
+    if (trace_dir / "torch_trace").is_dir():
+        trace_dir = trace_dir / "torch_trace"
+
+    if not trace_dir.is_dir():
+        print(f"Error: trace directory not found: {trace_dir}")
+        return 1
+
+    gap_config = GapAnalysisConfig(
+        enabled=True,
+        trace_start_pct=args.start_pct,
+        trace_end_pct=args.end_pct,
+        top_k=args.top_k,
+        min_duration_us=args.min_duration_us,
+        categories=getattr(args, "categories", None),
+        ignore_categories=getattr(args, "ignore_categories", None),
+    )
+
+    # All output goes into a gap_analysis/ subfolder
+    base_dir = getattr(args, "output_dir", None) or trace_dir.parent
+    gap_dir = Path(base_dir) / "gap_analysis"
+    gap_dir.mkdir(parents=True, exist_ok=True)
+
+    analyzer = GapAnalyzer(gap_config)
+    result = analyzer.analyze(trace_dir)
+
+    if result.errors:
+        for err in result.errors:
+            print(f"Warning: {err}")
+
+    if not result.merged_kernels:
+        print("No kernel events found in traces.")
+        return 1
+
+    csv_path = result.to_csv(gap_dir / "gap_analysis.csv")
+    if len(result.rank_results) > 1:
+        result.to_rank_csv(gap_dir)
+
+    # Print summary
+    start = gap_config.trace_start_pct
+    end = gap_config.trace_end_pct
+    print(f"\nGap Analysis ({start}%-{end}% window, category-filtered)")
+    print(f"{'=' * 60}")
+    print(f"Ranks analyzed: {len(result.rank_results)}")
+    if gap_config.categories:
+        print(f"Categories: {', '.join(gap_config.categories)}")
+    if gap_config.ignore_categories:
+        print(f"Ignore: {', '.join(gap_config.ignore_categories)}")
+    print(f"Total duration: {result.total_duration_us:.2f} us")
+    print(f"\n{'Name':50s} {'Calls':>6s} {'Self CUDA (us)':>15s} {'Avg (us)':>12s} {'% Total':>8s}")
+    print("-" * 95)
+    for k in result.merged_kernels:
+        pct = (
+            k.total_duration_us / result.total_duration_us * 100.0
+            if result.total_duration_us > 0 else 0.0
+        )
+        name = k.name if len(k.name) <= 50 else k.name[:47] + "..."
+        print(f"  {name:50s} {k.calls:6d} {k.total_duration_us:15.2f} {k.avg_us:12.2f} {pct:7.2f}%")
+    print(f"\nOutput: {gap_dir}")
+
+    return 0
+
+
 def run_benchmark(args, config: Dict[str, Any]) -> int:
     """Run benchmark mode."""
     from .modes.benchmark import BenchmarkMode, BenchmarkConfig
-    
+
+    # Handle gap-analysis sub-subcommand
+    if getattr(args, "benchmark_action", None) == "gap-analysis":
+        return run_gap_analysis_standalone(args)
+
     # Build benchmark config
     benchmark_cfg = {}
     
@@ -867,6 +941,43 @@ def create_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("./results"),
         help="Output directory",
+    )
+
+    # Sub-subcommands under benchmark
+    benchmark_subs = benchmark_parser.add_subparsers(
+        dest="benchmark_action", help="Benchmark sub-actions"
+    )
+
+    gap_parser = benchmark_subs.add_parser(
+        "gap-analysis", help="Run gap analysis on existing torch traces"
+    )
+    gap_parser.add_argument(
+        "--trace-dir", type=Path, required=True,
+        help="Path to torch_trace directory (or benchmark workspace)",
+    )
+    gap_parser.add_argument(
+        "--start-pct", type=float, default=0.0,
+        help="Start of analysis window (0-100, default: 0)",
+    )
+    gap_parser.add_argument(
+        "--end-pct", type=float, default=100.0,
+        help="End of analysis window (0-100, default: 100)",
+    )
+    gap_parser.add_argument(
+        "--top-k", type=int, default=20,
+        help="Number of top bottleneck kernels (default: 20)",
+    )
+    gap_parser.add_argument(
+        "--min-duration-us", type=float, default=0.0,
+        help="Minimum event duration in microseconds (default: 0)",
+    )
+    gap_parser.add_argument(
+        "--categories", type=str, nargs="*", default=None,
+        help="Event categories to include (e.g. kernel gpu). None = all.",
+    )
+    gap_parser.add_argument(
+        "--ignore-categories", type=str, nargs="*", default=None,
+        help="Event categories to exclude (e.g. gpu_user_annotation)",
     )
 
     return parser

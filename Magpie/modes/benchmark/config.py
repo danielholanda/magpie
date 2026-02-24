@@ -192,6 +192,68 @@ class ProfilerConfig:
 
 
 @dataclass
+class GapAnalysisConfig:
+    """
+    Gap analysis configuration for torch profiler trace analysis.
+    
+    Analyzes a time window of the trace to identify kernel-level bottlenecks.
+    
+    Attributes:
+        enabled: Whether gap analysis is enabled (default: False)
+        trace_start_pct: Start of analysis window as percentage of trace duration (0-100)
+        trace_end_pct: End of analysis window as percentage of trace duration (0-100)
+        top_k: Number of top bottleneck events to include in the report
+        min_duration_us: Filter out events shorter than this (microseconds)
+        categories: Event categories to include (e.g., ["kernel", "gpu"]). None = all.
+        ignore_categories: Event categories to exclude (e.g., ["gpu_user_annotation"])
+    """
+    enabled: bool = False
+    trace_start_pct: float = 0.0
+    trace_end_pct: float = 100.0
+    top_k: int = 20
+    min_duration_us: float = 0.0
+    categories: Optional[List[str]] = field(default_factory=lambda: ["kernel", "gpu"])
+    ignore_categories: Optional[List[str]] = field(default_factory=lambda: ["gpu_user_annotation"])
+    
+    def __post_init__(self):
+        """Validate percentage range."""
+        if not (0.0 <= self.trace_start_pct <= 100.0):
+            raise ValueError(f"trace_start_pct must be 0-100, got {self.trace_start_pct}")
+        if not (0.0 <= self.trace_end_pct <= 100.0):
+            raise ValueError(f"trace_end_pct must be 0-100, got {self.trace_end_pct}")
+        if self.trace_start_pct >= self.trace_end_pct:
+            raise ValueError(
+                f"trace_start_pct ({self.trace_start_pct}) must be less than "
+                f"trace_end_pct ({self.trace_end_pct})"
+            )
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            "enabled": self.enabled,
+            "trace_start_pct": self.trace_start_pct,
+            "trace_end_pct": self.trace_end_pct,
+            "top_k": self.top_k,
+            "min_duration_us": self.min_duration_us,
+            "categories": self.categories,
+            "ignore_categories": self.ignore_categories,
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "GapAnalysisConfig":
+        """Create from dictionary."""
+        return cls(
+            enabled=data.get("enabled", False),
+            trace_start_pct=data.get("trace_start_pct", 0.0),
+            trace_end_pct=data.get("trace_end_pct", 100.0),
+            top_k=data.get("top_k", 20),
+            min_duration_us=data.get("min_duration_us", 0.0),
+            categories=data.get("categories", ["kernel", "gpu"]),
+            ignore_categories=data.get("ignore_categories", ["gpu_user_annotation"]),
+        )
+
+
+@dataclass
 class BenchmarkConfig:
     """
     Configuration for benchmark mode.
@@ -228,6 +290,9 @@ class BenchmarkConfig:
     inferencemax_path: str = "/root/hao_workspace/InferenceMAX"
     hf_cache_path: Optional[str] = None
     
+    # Gap analysis
+    gap_analysis: GapAnalysisConfig = field(default_factory=GapAnalysisConfig)
+    
     # InferenceMAX specific
     runner_type: Optional[str] = None
     benchmark_script: Optional[str] = None
@@ -252,6 +317,10 @@ class BenchmarkConfig:
         # Convert profiler dict to ProfilerConfig if needed
         if isinstance(self.profiler, dict):
             self.profiler = ProfilerConfig.from_dict(self.profiler)
+        
+        # Convert gap_analysis dict to GapAnalysisConfig if needed
+        if isinstance(self.gap_analysis, dict):
+            self.gap_analysis = GapAnalysisConfig.from_dict(self.gap_analysis)
     
     def get_env_vars(self) -> Dict[str, str]:
         """
@@ -299,6 +368,7 @@ class BenchmarkConfig:
             "precision": self.precision,
             "envs": self.envs,
             "profiler": self.profiler.to_dict(),
+            "gap_analysis": self.gap_analysis.to_dict(),
             "docker_image": self.docker_image,
             "gpu_arch": self.gpu_arch,
             "timeout_seconds": self.timeout_seconds,
@@ -314,12 +384,16 @@ class BenchmarkConfig:
         profiler_data = data.get("profiler", {})
         profiler = ProfilerConfig.from_dict(profiler_data) if profiler_data else ProfilerConfig()
         
+        gap_data = data.get("gap_analysis", {})
+        gap_analysis = GapAnalysisConfig.from_dict(gap_data) if gap_data else GapAnalysisConfig()
+        
         return cls(
             framework=data.get("framework", "sglang"),
             model=data.get("model", ""),
             precision=data.get("precision", "fp8"),
             envs=data.get("envs", {}),
             profiler=profiler,
+            gap_analysis=gap_analysis,
             docker_image=data.get("docker_image"),
             gpu_arch=data.get("gpu_arch"),
             timeout_seconds=data.get("timeout_seconds", 3600.0),
