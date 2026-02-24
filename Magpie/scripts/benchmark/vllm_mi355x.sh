@@ -44,14 +44,6 @@ export VLLM_ROCM_USE_AITER_MHA=0
 SERVER_LOG=/workspace/server.log
 PORT=${PORT:-8888}
 
-# Extract --served-model-name from EXTRA_VLLM_ARGS so the benchmark client
-# uses the same model name the server exposes via the API.
-BENCH_MODEL="$MODEL"
-if [[ "$EXTRA_VLLM_ARGS" =~ --served-model-name[[:space:]]+([^[:space:]]+) ]]; then
-    BENCH_MODEL="${BASH_REMATCH[1]}"
-    echo "Detected --served-model-name in EXTRA_VLLM_ARGS, benchmark client will use: $BENCH_MODEL"
-fi
-
 set -x
 vllm serve $MODEL --port $PORT \
   --tensor-parallel-size=$TP \
@@ -66,14 +58,8 @@ SERVER_PID=$!
 # Wait for server to be ready
 wait_for_server_ready --port "$PORT" --server-log "$SERVER_LOG" --server-pid "$SERVER_PID"
 
-TOKENIZER_ARGS=""
-if [[ "$BENCH_MODEL" != "$MODEL" ]]; then
-    TOKENIZER_ARGS="--tokenizer $MODEL"
-fi
-
 run_benchmark_serving \
-    --model "$BENCH_MODEL" \
-    $TOKENIZER_ARGS \
+    --model "$MODEL" \
     --port "$PORT" \
     --backend vllm \
     --input-len "$ISL" \
