@@ -13,6 +13,7 @@ from .common import (
 )
 from .gpu import (
     GPUVendor,
+    GPUComputeSpec,
     GPUHardwareInfo,
     GPUConfig,
     GPUController,
@@ -21,6 +22,7 @@ from .gpu import (
     detect_gpu,
     get_gpu_info,
     get_gpu_count,
+    get_amd_compute_specs,
     list_gpus,
     load_gpu_config_from_dict,
     get_reset_after_benchmark,
@@ -31,6 +33,7 @@ __all__ = [
     "compile_hip",
     # Single GPU
     "GPUVendor",
+    "GPUComputeSpec",
     "GPUHardwareInfo",
     "GPUConfig",
     "GPUController",
@@ -41,6 +44,7 @@ __all__ = [
     "detect_gpu",
     "get_gpu_info",
     "get_gpu_count",
+    "get_amd_compute_specs",
     "list_gpus",
     # Config loading
     "load_gpu_config_from_dict",

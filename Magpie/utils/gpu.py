@@ -9,15 +9,21 @@ GPU detection and hardware control utilities.
 
 from __future__ import annotations
 
+import json as _json
 import subprocess
 import logging
 import re
+import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional, Tuple, List, Dict
 from enum import Enum, auto
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logger = logging.getLogger(__name__)
+
+_MAGPIE_CACHE_DIR = Path.home() / ".magpie"
+_COMPUTE_SPEC_CACHE_FILE = _MAGPIE_CACHE_DIR / "gpu_compute_specs.json"
 
 
 class GPUVendor(Enum):
@@ -26,6 +32,75 @@ class GPUVendor(Enum):
     AMD = auto()
     NVIDIA = auto()
     UNKNOWN = auto()
+
+
+@dataclass
+class GPUComputeSpec:
+    """Static GPU compute architecture specifications (from rocminfo / nvidia-smi).
+
+    These are immutable hardware properties that do not change at runtime.
+    """
+
+    # Compute resources
+    compute_units: Optional[int] = None
+    simds_per_cu: Optional[int] = None
+    shader_engines: Optional[int] = None
+    wavefront_size: Optional[int] = None
+    max_workgroup_size: Optional[int] = None
+    max_workgroup_size_xyz: Optional[List[int]] = None
+    max_waves_per_cu: Optional[int] = None
+    max_workitems_per_cu: Optional[int] = None
+
+    # Grid dispatch limits
+    grid_max_size: Optional[int] = None
+    grid_max_size_xyz: Optional[List[int]] = None
+
+    # Cache hierarchy (KB)
+    l1_cache_kb: Optional[int] = None
+    l2_cache_kb: Optional[int] = None
+    l3_cache_kb: Optional[int] = None
+
+    # Cacheline
+    cacheline_bytes: Optional[int] = None
+
+    # Local Data Share / Shared Memory (KB)
+    lds_size_kb: Optional[int] = None
+
+    # Memory subsystem
+    memory_bus_width_bits: Optional[int] = None
+    memory_bandwidth_gbs: Optional[float] = None
+
+    # ISA / device identity
+    isa_name: Optional[str] = None
+    marketing_name: Optional[str] = None
+    chip_id: Optional[str] = None
+    gpu_uuid: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary, omitting None values for cleaner output."""
+        return {k: v for k, v in {
+            "compute_units": self.compute_units,
+            "simds_per_cu": self.simds_per_cu,
+            "shader_engines": self.shader_engines,
+            "wavefront_size": self.wavefront_size,
+            "max_workgroup_size": self.max_workgroup_size,
+            "max_workgroup_size_xyz": self.max_workgroup_size_xyz,
+            "max_waves_per_cu": self.max_waves_per_cu,
+            "max_workitems_per_cu": self.max_workitems_per_cu,
+            "grid_max_size": self.grid_max_size,
+            "grid_max_size_xyz": self.grid_max_size_xyz,
+            "l1_cache_kb": self.l1_cache_kb,
+            "l2_cache_kb": self.l2_cache_kb,
+            "l3_cache_kb": self.l3_cache_kb,
+            "cacheline_bytes": self.cacheline_bytes,
+            "lds_size_kb": self.lds_size_kb,
+            "memory_bus_width_bits": self.memory_bus_width_bits,
+            "memory_bandwidth_gbs": self.memory_bandwidth_gbs,
+            "isa_name": self.isa_name,
+            "marketing_name": self.marketing_name,
+            "chip_id": self.chip_id,
+            "gpu_uuid": self.gpu_uuid,
+        }.items() if v is not None}
 
 
 @dataclass
@@ -55,9 +130,12 @@ class GPUHardwareInfo:
     memory_total_gb: Optional[float] = None
     memory_used_gb: Optional[float] = None
 
+    # Static compute architecture specs
+    compute_spec: Optional[GPUComputeSpec] = None
+
     def to_dict(self) -> dict:
         """Convert to dictionary."""
-        return {
+        d = {
             "vendor": self.vendor.name,
             "architecture": self.architecture,
             "device_id": self.device_id,
@@ -73,6 +151,9 @@ class GPUHardwareInfo:
             "memory_total_gb": self.memory_total_gb,
             "memory_used_gb": self.memory_used_gb,
         }
+        if self.compute_spec is not None:
+            d["compute_spec"] = self.compute_spec.to_dict()
+        return d
 
 
 @dataclass
@@ -91,6 +172,215 @@ class GPUConfig:
     mem_clock_level: Optional[int] = None
 
 
+def _parse_rocminfo_gpu_agents(raw_output: str) -> List[GPUComputeSpec]:
+    """Parse rocminfo output and return a GPUComputeSpec per GPU agent.
+
+    Splits the output into Agent blocks, filters GPU agents, and extracts
+    static hardware properties from each.
+    """
+    agent_blocks: List[str] = re.split(r"^\*{5,}", raw_output, flags=re.MULTILINE)
+    specs: List[GPUComputeSpec] = []
+
+    for block in agent_blocks:
+        if "Device Type:" not in block:
+            continue
+        type_match = re.search(r"Device Type:\s+(\w+)", block)
+        if not type_match or type_match.group(1) != "GPU":
+            continue
+
+        spec = GPUComputeSpec()
+
+        def _int(pattern: str) -> Optional[int]:
+            m = re.search(pattern, block)
+            return int(m.group(1)) if m else None
+
+        spec.marketing_name = (
+            re.search(r"Marketing Name:\s+(.+)", block).group(1).strip()
+            if re.search(r"Marketing Name:\s+(.+)", block)
+            else None
+        )
+        uuid_m = re.search(r"Uuid:\s+(GPU-[\w]+)", block)
+        spec.gpu_uuid = uuid_m.group(1) if uuid_m else None
+        chip_m = re.search(r"Chip ID:\s+\d+\((0x\w+)\)", block)
+        spec.chip_id = chip_m.group(1) if chip_m else None
+
+        spec.compute_units = _int(r"Compute Unit:\s+(\d+)")
+        spec.simds_per_cu = _int(r"SIMDs per CU:\s+(\d+)")
+        spec.shader_engines = _int(r"Shader Engines:\s+(\d+)")
+        spec.wavefront_size = _int(r"Wavefront Size:\s+(\d+)")
+        spec.max_workgroup_size = _int(r"Workgroup Max Size:\s+(\d+)")
+        spec.max_waves_per_cu = _int(r"Max Waves Per CU:\s+(\d+)")
+        spec.max_workitems_per_cu = _int(r"Max Work-item Per CU:\s+(\d+)")
+        spec.cacheline_bytes = _int(r"Cacheline Size:\s+(\d+)")
+
+        # Workgroup Max Size per Dimension (x, y, z)
+        wg_dim = re.search(
+            r"Workgroup Max Size per Dimension:\s*\n"
+            r"\s+x\s+(\d+).*\n"
+            r"\s+y\s+(\d+).*\n"
+            r"\s+z\s+(\d+)",
+            block,
+        )
+        if wg_dim:
+            spec.max_workgroup_size_xyz = [
+                int(wg_dim.group(1)), int(wg_dim.group(2)), int(wg_dim.group(3))
+            ]
+
+        # Grid Max Size
+        spec.grid_max_size = _int(r"Grid Max Size:\s+(\d+)")
+        grid_dim = re.search(
+            r"Grid Max Size per Dimension:\s*\n"
+            r"\s+x\s+(\d+).*\n"
+            r"\s+y\s+(\d+).*\n"
+            r"\s+z\s+(\d+)",
+            block,
+        )
+        if grid_dim:
+            spec.grid_max_size_xyz = [
+                int(grid_dim.group(1)), int(grid_dim.group(2)), int(grid_dim.group(3))
+            ]
+
+        # Cache hierarchy – rocminfo lists L1, L2, L3 under "Cache Info:"
+        cache_section = re.search(
+            r"Cache Info:\s*\n((?:\s+L\d.*\n)+)", block
+        )
+        if cache_section:
+            cache_text = cache_section.group(1)
+            l1 = re.search(r"L1:\s+(\d+)", cache_text)
+            l2 = re.search(r"L2:\s+(\d+)", cache_text)
+            l3 = re.search(r"L3:\s+(\d+)", cache_text)
+            spec.l1_cache_kb = int(l1.group(1)) if l1 else None
+            spec.l2_cache_kb = int(l2.group(1)) if l2 else None
+            spec.l3_cache_kb = int(l3.group(1)) if l3 else None
+
+        # LDS = GROUP segment size
+        group_match = re.search(
+            r"Segment:\s+GROUP\s*\n\s*Size:\s+(\d+)", block
+        )
+        if group_match:
+            spec.lds_size_kb = int(group_match.group(1))
+
+        # ISA name (first ISA entry)
+        isa_match = re.search(r"Name:\s+(amdgcn[^\s]+)", block)
+        spec.isa_name = isa_match.group(1) if isa_match else None
+
+        specs.append(spec)
+
+    return specs
+
+
+def _load_compute_spec_cache() -> Optional[Dict]:
+    """Load cached compute specs from ~/.magpie/gpu_compute_specs.json."""
+    try:
+        if _COMPUTE_SPEC_CACHE_FILE.exists():
+            data = _json.loads(_COMPUTE_SPEC_CACHE_FILE.read_text())
+            return data
+    except Exception as e:
+        logger.debug(f"Failed to read compute spec cache: {e}")
+    return None
+
+
+def _save_compute_spec_cache(specs: List[GPUComputeSpec]) -> None:
+    """Save compute specs to ~/.magpie/gpu_compute_specs.json."""
+    try:
+        _MAGPIE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "cached_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "gpu_count": len(specs),
+            "devices": {str(i): specs[i].to_dict() for i in range(len(specs))},
+        }
+        _COMPUTE_SPEC_CACHE_FILE.write_text(
+            _json.dumps(payload, indent=2) + "\n"
+        )
+        logger.info(
+            f"Cached {len(specs)} GPU compute specs to {_COMPUTE_SPEC_CACHE_FILE}"
+        )
+    except Exception as e:
+        logger.warning(f"Failed to write compute spec cache: {e}")
+
+
+def _spec_from_cache_dict(d: dict) -> GPUComputeSpec:
+    """Reconstruct a GPUComputeSpec from a cached dictionary."""
+    return GPUComputeSpec(
+        compute_units=d.get("compute_units"),
+        simds_per_cu=d.get("simds_per_cu"),
+        shader_engines=d.get("shader_engines"),
+        wavefront_size=d.get("wavefront_size"),
+        max_workgroup_size=d.get("max_workgroup_size"),
+        max_workgroup_size_xyz=d.get("max_workgroup_size_xyz"),
+        max_waves_per_cu=d.get("max_waves_per_cu"),
+        max_workitems_per_cu=d.get("max_workitems_per_cu"),
+        grid_max_size=d.get("grid_max_size"),
+        grid_max_size_xyz=d.get("grid_max_size_xyz"),
+        l1_cache_kb=d.get("l1_cache_kb"),
+        l2_cache_kb=d.get("l2_cache_kb"),
+        l3_cache_kb=d.get("l3_cache_kb"),
+        cacheline_bytes=d.get("cacheline_bytes"),
+        lds_size_kb=d.get("lds_size_kb"),
+        memory_bus_width_bits=d.get("memory_bus_width_bits"),
+        memory_bandwidth_gbs=d.get("memory_bandwidth_gbs"),
+        isa_name=d.get("isa_name"),
+        marketing_name=d.get("marketing_name"),
+        chip_id=d.get("chip_id"),
+        gpu_uuid=d.get("gpu_uuid"),
+    )
+
+
+# Module-level in-memory cache so rocminfo is parsed at most once per process.
+_rocminfo_specs: Optional[List[GPUComputeSpec]] = None
+
+
+def get_amd_compute_specs(force_refresh: bool = False) -> List[GPUComputeSpec]:
+    """Get compute specs for all AMD GPUs, using a two-level cache.
+
+    Level 1: in-memory (process lifetime).
+    Level 2: ~/.magpie/gpu_compute_specs.json (persists across runs).
+
+    Args:
+        force_refresh: bypass caches and re-parse rocminfo.
+    """
+    global _rocminfo_specs
+
+    if not force_refresh and _rocminfo_specs is not None:
+        return _rocminfo_specs
+
+    if not force_refresh:
+        cached = _load_compute_spec_cache()
+        if cached and "devices" in cached:
+            specs = [
+                _spec_from_cache_dict(cached["devices"][str(i)])
+                for i in range(cached.get("gpu_count", 0))
+                if str(i) in cached["devices"]
+            ]
+            if specs:
+                _rocminfo_specs = specs
+                logger.info(
+                    f"Loaded {len(specs)} GPU specs from cache "
+                    f"(cached at {cached.get('cached_at', 'unknown')})"
+                )
+                return specs
+
+    # Parse live from rocminfo
+    try:
+        result = subprocess.run(
+            ["rocminfo"], capture_output=True, text=True, timeout=15
+        )
+        if result.returncode == 0:
+            specs = _parse_rocminfo_gpu_agents(result.stdout)
+            if specs:
+                _rocminfo_specs = specs
+                _save_compute_spec_cache(specs)
+                return specs
+    except FileNotFoundError:
+        logger.debug("rocminfo not found")
+    except subprocess.TimeoutExpired:
+        logger.warning("rocminfo timed out")
+    except Exception as e:
+        logger.warning(f"Failed to parse rocminfo: {e}")
+
+    return []
+
+
 class GPUController:
     """GPU hardware controller for AMD and NVIDIA GPUs."""
 
@@ -107,10 +397,18 @@ class GPUController:
         return GPUHardwareInfo(vendor=GPUVendor.UNKNOWN)
 
     def _get_amd_info(self) -> GPUHardwareInfo:
-        """Get AMD GPU info using rocm-smi."""
+        """Get AMD GPU info using rocm-smi and rocminfo."""
         info = GPUHardwareInfo(
             vendor=GPUVendor.AMD, architecture=self.arch, device_id=self.device_id
         )
+
+        # Populate static compute specs (cached)
+        specs = get_amd_compute_specs()
+        if self.device_id < len(specs):
+            spec = specs[self.device_id]
+            info.compute_spec = spec
+            if spec.marketing_name and not info.device_name:
+                info.device_name = spec.marketing_name
 
         try:
             # Get power info
@@ -772,6 +1070,18 @@ class MultiGPUController:
                 f"  Memory: {info.memory_used_gb or 0:.1f} / "
                 f"{info.memory_total_gb or 0:.1f} GB"
             )
+            if info.compute_spec:
+                cs = info.compute_spec
+                print(f"  Compute Units: {cs.compute_units or 'N/A'}")
+                print(f"  SIMDs/CU: {cs.simds_per_cu or 'N/A'}")
+                print(f"  Wavefront: {cs.wavefront_size or 'N/A'}")
+                print(f"  LDS: {cs.lds_size_kb or 'N/A'} KB")
+                if cs.l1_cache_kb:
+                    print(f"  L1: {cs.l1_cache_kb} KB")
+                if cs.l2_cache_kb:
+                    print(f"  L2: {cs.l2_cache_kb} KB")
+                if cs.l3_cache_kb:
+                    print(f"  L3: {cs.l3_cache_kb} KB")
 
         print(f"\n{'=' * 70}\n")
 
