@@ -4,8 +4,7 @@
 # Usage:
 #   python -m Magpie benchmark --benchmark-config examples/benchmark_vllm_gptoss_120b.yaml
 #
-# Script resolution (auto):
-#   framework=vllm + precision=fp4 + runner=mi355x -> gptoss_fp4_mi355x.sh
+# Uses Magpie generic script vllm_mi355x.sh (compatible with vLLM v0.15.1)
 
 benchmark:
   framework: vllm
@@ -18,7 +17,12 @@ benchmark:
     ISL: 1024
     OSL: 1024
     RANDOM_RANGE_RATIO: 1
-    MAX_MODEL_LEN: 2248   # ISL + OSL + 200
+    MAX_MODEL_LEN: 2248  # ISL + OSL + 200
+    # MI355X performance flags (supplements vllm_mi355x.sh defaults)
+    VLLM_USE_AITER_TRITON_FUSED_SPLIT_QKV_ROPE: 1
+    VLLM_USE_AITER_TRITON_FUSED_ADD_RMSNORM_PAD: 1
+    TRITON_HIP_PRESHUFFLE_SCALES: 1
+    VLLM_USE_AITER_TRITON_GEMM: 1
 
   profiler:
     torch_profiler:
@@ -29,7 +33,7 @@ benchmark:
       enabled: false
 
   docker_image: "vllm/vllm-openai-rocm:v0.15.1"
-  script: "gptoss_fp4_mi355x.sh"
+  benchmark_script: "vllm_mi355x.sh"
 
   gap_analysis:
     enabled: true
