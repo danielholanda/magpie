@@ -1,0 +1,37 @@
+# vLLM Benchmark Configuration for openai/gpt-oss-120b (FP4, MI355X)
+# ====================================================================
+#
+# Usage:
+#   python -m Magpie benchmark --benchmark-config examples/benchmark_vllm_gptoss_120b.yaml
+#
+# Script resolution (auto):
+#   framework=vllm + precision=fp4 + runner=mi355x -> gptoss_fp4_mi355x.sh
+
+benchmark:
+  framework: vllm
+  model: openai/gpt-oss-120b
+  precision: fp4
+
+  envs:
+    TP: 8
+    CONC: 32
+    ISL: 1024
+    OSL: 1024
+    RANDOM_RANGE_RATIO: 1
+    MAX_MODEL_LEN: 2248   # ISL + OSL + 200
+
+  profiler:
+    torch_profiler:
+      enabled: true
+    system_profiler:
+      enabled: false
+    tracelens:
+      enabled: false
+
+  docker_image: "vllm/vllm-openai-rocm:v0.15.1"
+  script: "gptoss_fp4_mi355x.sh"
+
+  gap_analysis:
+    enabled: true
+
+  timeout_seconds: 3600
