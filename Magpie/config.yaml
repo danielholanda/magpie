@@ -155,7 +155,7 @@ benchmark:
   
   # Path to InferenceMAX installation
   # If not configured or path doesn't exist, InferenceMAX will be auto-cloned from:
-  # https://github.com/haofrank/InferenceMAX.git
+  # https://github.com/SemiAnalysisAI/InferenceX.git
   inferencemax_path: ""
   
   # Default timeout for benchmark tasks

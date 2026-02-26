@@ -83,7 +83,7 @@ class BenchmarkMode:
             result = BenchmarkResult()
             result.success = False
             result.errors.append(f"Failed to setup InferenceMAX: {e}")
-            result.errors.append(f"Please clone manually: git clone https://github.com/haofrank/InferenceMAX.git")
+            result.errors.append(f"Please clone manually: git clone https://github.com/SemiAnalysisAI/InferenceX.git")
             return result
         
         # 1. Copy Magpie generic scripts to InferenceMAX/benchmarks/
@@ -315,9 +315,9 @@ class BenchmarkMode:
         env_vars["RESULT_DIR"] = "/workspace/output"
         env_vars["RUNNER_TYPE"] = runner_type
         
-        # torch_profiler environment
+        # torch_profiler environment (matches official InferenceX: PROFILE=1)
         if self.config.profiler.torch_profiler.enabled:
-            env_vars["ENABLE_PROFILE"] = "true"
+            env_vars["PROFILE"] = "1"
             env_vars["VLLM_TORCH_PROFILER_DIR"] = "/workspace/output/torch_trace"
             env_vars["SGLANG_TORCH_PROFILER_DIR"] = "/workspace/output/torch_trace"
 
