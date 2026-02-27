@@ -304,22 +304,23 @@ class BenchmarkMode:
         # InferenceMAX mount
         inferencemax_path = self.config.inferencemax_path
         if os.path.exists(inferencemax_path):
-            cmd.extend(["-v", f"{inferencemax_path}:/workspace/InferenceMAX"])
+            cmd.extend(["-v", f"{inferencemax_path}:/opt/InferenceMAX"])
         
-        # Workspace mount (for results output)
-        cmd.extend(["-v", f"{workspace}:/workspace/output"])
+        # Workspace mount — map directly to /workspace so all output
+        # (server.log, results, torch_trace/) lands on the host automatically
+        cmd.extend(["-v", f"{workspace}:/workspace"])
         
         # Environment variables
         env_vars = self.config.get_env_vars()
-        env_vars["RESULT_FILENAME"] = "/workspace/output/inferencemax_result"
-        env_vars["RESULT_DIR"] = "/workspace/output"
+        env_vars["RESULT_FILENAME"] = "inferencemax_result"
+        env_vars["RESULT_DIR"] = "/workspace"
         env_vars["RUNNER_TYPE"] = runner_type
         
         # torch_profiler environment (matches official InferenceX: PROFILE=1)
         if self.config.profiler.torch_profiler.enabled:
             env_vars["PROFILE"] = "1"
-            env_vars["VLLM_TORCH_PROFILER_DIR"] = "/workspace/output/torch_trace"
-            env_vars["SGLANG_TORCH_PROFILER_DIR"] = "/workspace/output/torch_trace"
+            env_vars["VLLM_TORCH_PROFILER_DIR"] = "/workspace/torch_trace"
+            env_vars["SGLANG_TORCH_PROFILER_DIR"] = "/workspace/torch_trace"
 
         
         # HuggingFace token from environment
@@ -331,7 +332,7 @@ class BenchmarkMode:
             cmd.extend(["-e", f"{key}={value}"])
         
         # Working directory
-        cmd.extend(["-w", "/workspace/InferenceMAX"])
+        cmd.extend(["-w", "/opt/InferenceMAX"])
         
         # Image and entrypoint - always override to bash for script compatibility
         cmd.extend(["--entrypoint", "/bin/bash"])
@@ -343,7 +344,7 @@ class BenchmarkMode:
         # With --entrypoint /bin/bash, pass -c as first arg
         cmd.extend([
             "-c",
-            f"cd /workspace/InferenceMAX && bash {benchmark_script}"
+            f"cd /opt/InferenceMAX && bash {benchmark_script}"
         ])
         
         return cmd
