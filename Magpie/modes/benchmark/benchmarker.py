@@ -83,7 +83,7 @@ class BenchmarkMode:
             result = BenchmarkResult()
             result.success = False
             result.errors.append(f"Failed to setup InferenceMAX: {e}")
-            result.errors.append(f"Please clone manually: git clone https://github.com/haofrank/InferenceMAX.git")
+            result.errors.append(f"Please clone manually: git clone https://github.com/SemiAnalysisAI/InferenceX.git")
             return result
         
         # 1. Copy Magpie generic scripts to InferenceMAX/benchmarks/
@@ -169,6 +169,11 @@ class BenchmarkMode:
                     torch_trace_dir, workspace
                 )
                 result.tracelens_analysis = tracelens_result
+            
+            # Run gap analysis if enabled
+            if self.config.gap_analysis.enabled:
+                gap_result = self._run_gap_analysis(torch_trace_dir, workspace)
+                result.gap_analysis = gap_result
         
         # Save report
         self.workspace_mgr.save_report(result.to_dict())
@@ -299,22 +304,23 @@ class BenchmarkMode:
         # InferenceMAX mount
         inferencemax_path = self.config.inferencemax_path
         if os.path.exists(inferencemax_path):
-            cmd.extend(["-v", f"{inferencemax_path}:/workspace/InferenceMAX"])
+            cmd.extend(["-v", f"{inferencemax_path}:/opt/InferenceMAX"])
         
-        # Workspace mount (for results output)
-        cmd.extend(["-v", f"{workspace}:/workspace/output"])
+        # Workspace mount — map directly to /workspace so all output
+        # (server.log, results, torch_trace/) lands on the host automatically
+        cmd.extend(["-v", f"{workspace}:/workspace"])
         
         # Environment variables
         env_vars = self.config.get_env_vars()
-        env_vars["RESULT_FILENAME"] = "/workspace/output/inferencemax_result"
-        env_vars["RESULT_DIR"] = "/workspace/output"
+        env_vars["RESULT_FILENAME"] = "inferencemax_result"
+        env_vars["RESULT_DIR"] = "/workspace"
         env_vars["RUNNER_TYPE"] = runner_type
         
-        # torch_profiler environment
+        # torch_profiler environment (matches official InferenceX: PROFILE=1)
         if self.config.profiler.torch_profiler.enabled:
-            env_vars["ENABLE_PROFILE"] = "true"
-            env_vars["VLLM_TORCH_PROFILER_DIR"] = "/workspace/output/torch_trace"
-            env_vars["SGLANG_TORCH_PROFILER_DIR"] = "/workspace/output/torch_trace"
+            env_vars["PROFILE"] = "1"
+            env_vars["VLLM_TORCH_PROFILER_DIR"] = "/workspace/torch_trace"
+            env_vars["SGLANG_TORCH_PROFILER_DIR"] = "/workspace/torch_trace"
 
         
         # HuggingFace token from environment
@@ -326,7 +332,7 @@ class BenchmarkMode:
             cmd.extend(["-e", f"{key}={value}"])
         
         # Working directory
-        cmd.extend(["-w", "/workspace/InferenceMAX"])
+        cmd.extend(["-w", "/opt/InferenceMAX"])
         
         # Image and entrypoint - always override to bash for script compatibility
         cmd.extend(["--entrypoint", "/bin/bash"])
@@ -338,7 +344,7 @@ class BenchmarkMode:
         # With --entrypoint /bin/bash, pass -c as first arg
         cmd.extend([
             "-c",
-            f"cd /workspace/InferenceMAX && bash {benchmark_script}"
+            f"cd /opt/InferenceMAX && bash {benchmark_script}"
         ])
         
         return cmd
@@ -546,6 +552,63 @@ class BenchmarkMode:
             
         except Exception as e:
             logger.exception(f"TraceLens analysis failed: {e}")
+            return {"enabled": True, "error": str(e)}
+    
+    def _run_gap_analysis(
+        self,
+        torch_trace_dir: Path,
+        workspace: Path,
+    ) -> Dict[str, Any]:
+        """
+        Run gap analysis on torch profiler traces.
+        
+        Analyzes a time window of the trace to identify kernel-level
+        bottlenecks and writes a CSV report.
+        
+        Args:
+            torch_trace_dir: Directory containing torch trace files
+            workspace: Workspace directory for output
+        
+        Returns:
+            Gap analysis results dictionary
+        """
+        from .gap_analysis import GapAnalyzer
+
+        logger.info("Running gap analysis on torch traces...")
+        
+        try:
+            gap_dir = workspace / "gap_analysis"
+            gap_dir.mkdir(parents=True, exist_ok=True)
+
+            analyzer = GapAnalyzer(self.config.gap_analysis)
+            result = analyzer.analyze(torch_trace_dir)
+            
+            # Write merged CSV
+            csv_path = gap_dir / "gap_analysis.csv"
+            result.to_csv(csv_path)
+            logger.info(f"Wrote gap analysis CSV: {csv_path}")
+            
+            # Write per-rank CSVs if multiple ranks
+            if len(result.rank_results) > 1:
+                rank_paths = result.to_rank_csv(gap_dir)
+                for rp in rank_paths:
+                    logger.info(f"Wrote per-rank CSV: {rp}")
+            
+            ga_dict = result.to_dict()
+            ga_dict["csv_path"] = str(csv_path)
+            ga_dict["output_dir"] = str(gap_dir)
+            
+            if result.errors:
+                for err in result.errors:
+                    logger.warning(f"Gap analysis warning: {err}")
+            else:
+                n = len(result.merged_kernels)
+                logger.info(f"Gap analysis complete: {n} kernels in CSV")
+            
+            return ga_dict
+            
+        except Exception as e:
+            logger.exception(f"Gap analysis failed: {e}")
             return {"enabled": True, "error": str(e)}
     
     def cleanup(self) -> None:

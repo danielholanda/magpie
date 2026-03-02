@@ -41,7 +41,7 @@ export VLLM_ROCM_USE_AITER=1
 export VLLM_ROCM_USE_AITER_UNIFIED_ATTENTION=1
 export VLLM_ROCM_USE_AITER_MHA=0
 
-SERVER_LOG=/workspace/server.log
+SERVER_LOG=${SERVER_LOG:-/workspace/server.log}
 PORT=${PORT:-8888}
 
 set -x
@@ -50,7 +50,8 @@ vllm serve $MODEL --port $PORT \
   --gpu-memory-utilization 0.95 \
   --max-model-len $MAX_MODEL_LEN \
   --trust-remote-code \
-  --disable-log-requests > $SERVER_LOG 2>&1 &
+  --disable-log-requests \
+  $EXTRA_VLLM_ARGS > $SERVER_LOG 2>&1 &
 
 SERVER_PID=$!
 
@@ -67,7 +68,9 @@ run_benchmark_serving \
     --num-prompts $(( $CONC * 10 )) \
     --max-concurrency "$CONC" \
     --result-filename "$RESULT_FILENAME" \
-    --result-dir /workspace/
+    --result-dir /workspace/ \
+    --server-pid "$SERVER_PID" \
+    --trust-remote-code
 
 # After throughput, run evaluation only if RUN_EVAL is true
 if [ "${RUN_EVAL}" = "true" ]; then

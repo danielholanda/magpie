@@ -10,7 +10,7 @@ Benchmark mode enables framework-level performance benchmarking for LLM inferenc
 ├─────────────────────────────────────────────────────────────────────┤
 │  ┌───────────────┐    ┌───────────────┐    ┌────────────────────┐   │
 │  │BenchmarkConfig│  → │ BenchmarkMode │ →  │  BenchmarkResult   │   │
-│  │  (YAML)       │    │               │    │  (JSON)            │   │
+│  │  (YAML)       │    │               │    │  (JSON + CSV)      │   │
 │  └───────────────┘    └───────────────┘    └────────────────────┘   │
 │                               │                                     │
 │                               ▼                                     │
@@ -22,12 +22,14 @@ Benchmark mode enables framework-level performance benchmarking for LLM inferenc
 │  │  └─────────────┘        └─────────────────────────────────┘  │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 │                               │                                     │
-│                               ▼                                     │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │                   TraceLens Analysis (Host)                  │   │
-│  │  • TraceLens_generate_perf_report_pytorch                    │   │
-│  │  • TraceLens_generate_multi_rank_collective_report_pytorch   │   │
-│  └──────────────────────────────────────────────────────────────┘   │
+│                      ┌────────┴────────┐                            │
+│                      ▼                 ▼                            │
+│  ┌────────────────────────┐  ┌─────────────────────────────────┐   │
+│  │  Gap Analysis (Host)   │  │  TraceLens Analysis (Host)      │   │
+│  │  • Time window filter  │  │  • Perf report (per-rank)       │   │
+│  │  • Category filter     │  │  • Multi-rank collective report │   │
+│  │  • Kernel stats CSV    │  │                                 │   │
+│  └────────────────────────┘  └─────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -39,6 +41,12 @@ python -m Magpie benchmark --benchmark-config examples/benchmark_vllm.yaml
 
 # vLLM with TraceLens analysis
 python -m Magpie benchmark --benchmark-config examples/benchmark_vllm_tracelens.yaml
+
+# vLLM with gap analysis (kernel bottleneck report)
+python -m Magpie benchmark --benchmark-config examples/benchmark_vllm_kimi_k2.yaml
+
+# Standalone gap analysis on existing traces
+python -m Magpie benchmark gap-analysis --trace-dir results/benchmark_vllm_<timestamp>/
 
 # SGLang benchmark
 python -m Magpie benchmark --benchmark-config examples/benchmark_sglang.yaml
@@ -105,6 +113,19 @@ benchmark:
       perf_report_enabled: true      # Single-rank performance report
       multi_rank_report_enabled: true # Multi-rank collective report
       gpu_arch_config: null    # Optional: GPU arch config for roofline
+
+  # Gap analysis (kernel bottleneck report)
+  gap_analysis:
+    enabled: true              # Enable gap analysis after benchmark
+    trace_start_pct: 50        # Start of analysis window (0-100)
+    trace_end_pct: 80          # End of analysis window (0-100)
+    top_k: 20                  # Number of top kernels in report
+    min_duration_us: 0.0       # Filter out events shorter than this (us)
+    categories:                # Event category whitelist (default: [kernel, gpu])
+      - kernel
+      - gpu
+    ignore_categories:         # Event category blacklist (default: [gpu_user_annotation])
+      - gpu_user_annotation
       
   # Execution settings
   docker_image: null           # Optional: override auto-selected image
@@ -132,6 +153,7 @@ benchmark:
 | `MAX_MODEL_LEN` | Maximum model context length | - |
 | `GPU_MEM_UTIL` | GPU memory utilization | 0.95 |
 | `ENABLE_PROFILE` | Enable torch profiler | "false" |
+| `EXTRA_VLLM_ARGS` | Additional arguments passed to `vllm serve` | "" |
 
 ## Profiling Options
 
@@ -165,17 +187,69 @@ TraceLens provides automated analysis of torch profiler traces:
 - Communication pattern analysis
 - Load balancing metrics
 
+### Gap Analysis
+
+Gap analysis identifies GPU kernel bottlenecks from torch profiler traces. It applies a configurable time window to focus on the steady-state portion of the trace, then aggregates kernel durations by category.
+
+**Pipeline:**
+1. Apply time window (`trace_start_pct` – `trace_end_pct`) to isolate steady-state events
+2. Filter by category (case-insensitive substring matching on the event `cat` field)
+3. Aggregate stats per kernel name, rank by total duration
+
+**CSV output columns:** `Name, Calls, Self CUDA total (us), Avg time (us), % Total`
+
+**Defaults (no YAML needed):**
+- `categories`: `["kernel", "gpu"]`
+- `ignore_categories`: `["gpu_user_annotation"]`
+
+**Minimal config:**
+```yaml
+  gap_analysis:
+    enabled: true
+    trace_start_pct: 50
+    trace_end_pct: 80
+```
+
+#### Standalone CLI
+
+Run gap analysis on existing trace directories without re-running the benchmark:
+
+```bash
+# Basic usage (uses default categories and ignore_categories)
+python -m Magpie benchmark gap-analysis \
+    --trace-dir results/benchmark_vllm_<timestamp>/
+
+# With custom window and categories
+python -m Magpie benchmark gap-analysis \
+    --trace-dir results/benchmark_vllm_<timestamp>/torch_trace \
+    --start-pct 50 --end-pct 80 \
+    --top-k 15 \
+    --categories kernel gpu \
+    --ignore-categories gpu_user_annotation
+```
+
+The `--trace-dir` argument accepts either a benchmark workspace directory (auto-detects `torch_trace/` inside) or a direct path to the trace directory.
+
+Output is written to a `gap_analysis/` subfolder under the trace directory's parent.
+
 ## Output Structure
 
 ```
 results/benchmark_vllm_<timestamp>/
-├── benchmark_result.json      # Main benchmark results
-├── benchmark_summary.txt      # Human-readable summary
-├── server.log                 # Server logs
-├── client.log                 # Client logs
+├── benchmark_report.json      # Main benchmark results
+├── summary.txt                # Human-readable summary
+├── config.yaml                # Snapshot of benchmark configuration
+├── container_stdout.log       # Container stdout
+├── container_stderr.log       # Container stderr
+├── inferencemax_result.json   # Raw InferenceMAX output
 ├── torch_trace/               # Raw torch profiler traces
-│   ├── rank-0.*.pt.trace.json.gz
-│   ├── rank-1.*.pt.trace.json.gz
+│   ├── *-rank-0.*.pt.trace.json.gz
+│   ├── *-rank-1.*.pt.trace.json.gz
+│   └── ...
+├── gap_analysis/              # Gap analysis output (if enabled)
+│   ├── gap_analysis.csv       # Merged kernel stats across all ranks
+│   ├── gap_analysis_rank0.csv # Per-rank kernel stats
+│   ├── gap_analysis_rank1.csv
 │   └── ...
 ├── tracelens_rank0_csvs/      # Single-rank TraceLens analysis
 │   ├── gpu_timeline.csv
@@ -191,24 +265,28 @@ The `benchmark_result.json` contains:
 
 ```json
 {
-  "task_id": "benchmark_vllm_20260211_190617",
+  "success": true,
   "framework": "vllm",
-  "model": "deepseek-ai/DeepSeek-R1-0528",
-  "status": "success",
-  "metrics": {
-    "throughput_tps": 125.5,
-    "latency_p50_ms": 45.2,
-    "latency_p99_ms": 128.3,
-    "total_tokens": 50000,
-    "duration_seconds": 398.4
+  "model": "amd/Kimi-K2-Thinking-MXFP4",
+  "throughput": {
+    "request_throughput": 0.16,
+    "output_throughput": 1.13,
+    "total_token_throughput": 1192.76,
+    "completed_requests": 40
   },
-  "kernel_summary": [...],
-  "top_bottlenecks": [...],
-  "tracelens_analysis": {
-    "enabled": true,
-    "output_files": [...],
-    "errors": []
-  }
+  "latency": {
+    "ttft": { "mean_ms": 1185.44, "p99_ms": 1969.59 },
+    "tpot": { "mean_ms": 131.09, "p99_ms": 282.21 }
+  },
+  "gap_analysis": {
+    "config": { "trace_start_pct": 50, "trace_end_pct": 80, "categories": ["kernel", "gpu"] },
+    "csv_path": "results/.../gap_analysis/gap_analysis.csv",
+    "top_kernels": [
+      { "name": "rcclGenericKernel<...>", "calls": 19620, "self_cuda_total_us": 28999961.95, "pct_total": 44.0 },
+      { "name": "kernel_moe_mxgemm_2lds<...>", "calls": 9360, "self_cuda_total_us": 12495324.68, "pct_total": 18.9 }
+    ]
+  },
+  "tracelens_analysis": { "output_files": [...] }
 }
 ```
 
@@ -338,6 +416,7 @@ python -m Magpie benchmark --benchmark-config config.yaml --log-level DEBUG
 | `BenchmarkMode` | `benchmarker.py` | Main orchestrator |
 | `BenchmarkConfig` | `config.py` | Configuration dataclasses |
 | `TraceLensAnalyzer` | `tracelens.py` | TraceLens CLI integration |
+| `GapAnalyzer` | `gap_analysis.py` | Kernel bottleneck analysis |
 | `BenchmarkResult` | `result.py` | Result data structures |
 
 ### Execution Flow
@@ -346,9 +425,10 @@ python -m Magpie benchmark --benchmark-config config.yaml --log-level DEBUG
 2. **Docker Setup**: Prepare container with InferenceMAX scripts
 3. **Server Launch**: Start vLLM/SGLang server inside container
 4. **Client Execution**: Run benchmark client with profiling enabled
-5. **Trace Collection**: Copy torch profiler traces from container
-6. **TraceLens Analysis**: Run TraceLens CLI commands on host
-7. **Result Generation**: Aggregate metrics and generate reports
+5. **Trace Collection**: Torch profiler traces saved to workspace
+6. **TraceLens Analysis**: Run TraceLens CLI commands on host (if enabled)
+7. **Gap Analysis**: Analyze kernel bottlenecks within time window (if enabled)
+8. **Result Generation**: Aggregate metrics and generate reports
 
 ## Related
 

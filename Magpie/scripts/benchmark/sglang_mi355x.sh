@@ -34,7 +34,7 @@ fi
 export SGLANG_USE_AITER=1
 export SGLANG_AITER_MLA_PERSIST=1
 
-SERVER_LOG=/workspace/server.log
+SERVER_LOG=${SERVER_LOG:-/workspace/server.log}
 PORT=${PORT:-8888}
 
 set -x

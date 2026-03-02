@@ -1,0 +1,29 @@
+benchmark:
+  framework: vllm
+  model: amd/Kimi-K2-Thinking-MXFP4
+  precision: mxfp4
+
+  envs:                             # environment variables
+    TP: 4
+    CONC: 4
+    ISL: 8192
+    OSL: 8
+    RANDOM_RANGE_RATIO: 0.8
+    MAX_MODEL_LEN: 131072
+    EXTRA_VLLM_ARGS: "--block-size 1 --enable-auto-tool-choice --tool-call-parser kimi_k2"
+
+  profiler:
+    torch_profiler:
+      enabled: true
+    system_profiler:
+      enabled: false
+    tracelens:
+      enabled: false
+
+  docker_image: "rocm/vllm-private:mlperf_0.14_vllm"
+  timeout_seconds: 3600
+
+  gap_analysis:                      # gap analysis configuration(only support vllm)
+    enabled: true
+    trace_start_pct: 50
+    trace_end_pct: 80

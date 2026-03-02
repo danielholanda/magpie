@@ -12,12 +12,16 @@ This module provides:
 - BenchmarkResult: Results from benchmark execution
 """
 
-from .config import BenchmarkConfig, ProfilerConfig, TorchProfilerConfig, SystemProfilerConfig
+from .config import (
+    BenchmarkConfig, ProfilerConfig, TorchProfilerConfig,
+    SystemProfilerConfig, GapAnalysisConfig,
+)
 from .benchmarker import BenchmarkMode
 from .result import BenchmarkResult
 from .workspace import WorkspaceManager
 from .image_selector import ImageSelector
 from .inferencemax import InferenceMAXManager, ensure_inferencemax_available
+from .gap_analysis import GapAnalyzer, GapAnalysisResult
 
 __all__ = [
     "BenchmarkMode",
@@ -26,6 +30,9 @@ __all__ = [
     "ProfilerConfig",
     "TorchProfilerConfig",
     "SystemProfilerConfig",
+    "GapAnalysisConfig",
+    "GapAnalyzer",
+    "GapAnalysisResult",
     "WorkspaceManager",
     "ImageSelector",
     "InferenceMAXManager",

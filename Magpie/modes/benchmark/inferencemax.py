@@ -19,7 +19,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 # InferenceMAX repository configuration
-INFERENCEMAX_REPO_URL = "https://github.com/haofrank/InferenceMAX.git"
+INFERENCEMAX_REPO_URL = "https://github.com/SemiAnalysisAI/InferenceX.git"
 # Default directory:
 _PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 INFERENCEMAX_DEFAULT_DIR = str(_PROJECT_ROOT / "InferenceMAX")

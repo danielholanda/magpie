@@ -30,6 +30,12 @@ benchmark:
     system_profiler:
       enabled: false
       
+  gap_analysis:
+    enabled: false
+    trace_start_pct: 50
+    trace_end_pct: 80
+    top_k: 20
+
   # Will auto-clone InferenceMAX if not specified
   # inferencemax_path: ""
   
