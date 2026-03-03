@@ -210,21 +210,27 @@ class Performance:
         if kernel_cfg.has_prof_command():
             return self._run_custom_profiler(kernel_cfg)
 
-        # 3. No prof_command - check if we have testcase_command for built-in profiler
+        backend = self.perf_cfg.get_backend()
+
+        # 3. SCRIPT_BENCHMARK runs the kernel script directly (no testcase needed)
+        if backend == PerfBackend.SCRIPT_BENCHMARK:
+            try:
+                return self._run_script_benchmark(kernel_cfg)
+            except Exception as e:
+                logger.error(f"Script benchmark failed: {e}")
+                return PerformanceResult(success=False, errors=str(e))
+
+        # 4. No prof_command - check if we have testcase_command for built-in profiler
         if not kernel_cfg.has_testcase():
-            # 4. No testcase_command either, skip profiling
             return None
 
         # Use built-in profiler on testcase command
-        backend = self.perf_cfg.get_backend()
-
         try:
             if backend == PerfBackend.ROCPROF_COMPUTE:
                 return self._run_rocprof_compute_on_testcase(kernel_cfg)
             elif backend == PerfBackend.NCU:
                 return self._run_ncu_on_testcase(kernel_cfg)
             else:
-                # No profiling backend configured, skip
                 return None
 
         except Exception as e:
@@ -293,6 +299,130 @@ class Performance:
         except Exception as e:
             logger.error(f"Custom profiler failed: {e}")
             return PerformanceResult(success=False, errors=str(e))
+
+    def _run_script_benchmark(
+        self, kernel_cfg: KernelEvalConfig
+    ) -> PerformanceResult:
+        """
+        Run performance benchmarking by executing the kernel script with --benchmark.
+
+        Triton (and other Python-based) kernels support a __main__ block that,
+        when invoked with --benchmark, runs the kernel in a timing loop and
+        prints a line like:  BENCHMARK_MS: 1.234
+
+        Falls back to parsing common timing patterns from stdout, then to
+        wall-clock measurement.
+        """
+        import re
+        import sys as _sys
+        import time as _time
+
+        source_files = kernel_cfg.get_source_file_paths()
+        if not source_files:
+            return PerformanceResult(
+                success=False, errors="No source files for script benchmark"
+            )
+
+        working_dir = kernel_cfg.working_dir
+        env = get_updated_env(kernel_cfg.env)
+        python_bin = _sys.executable or "python3"
+        timeout = self.perf_cfg.timeout_seconds or 120.0
+
+        all_metrics = []
+        kernel_metrics_list = []
+
+        for src_idx, source_file in enumerate(source_files):
+            abs_source = str(Path(source_file).resolve())
+            # Strategy 1: Run with --benchmark flag
+            cmd = [python_bin, abs_source, "--benchmark"]
+            duration_ms = None
+
+            try:
+                t0 = _time.monotonic()
+                proc = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    cwd=working_dir,
+                    env=env,
+                )
+                wall_ms = (_time.monotonic() - t0) * 1000.0
+
+                if proc.returncode == 0:
+                    # Parse BENCHMARK_MS
+                    match = re.search(r"BENCHMARK_MS:\s*([\d.]+)", proc.stdout)
+                    if match:
+                        duration_ms = float(match.group(1))
+                    else:
+                        # Parse common timing patterns
+                        for pattern in [
+                            r"(?:avg|mean|median)\s*[:=]\s*([\d.]+)\s*ms",
+                            r"([\d.]+)\s*ms[/\s]*iter",
+                            r"Time[:\s]*([\d.]+)\s*ms",
+                        ]:
+                            match = re.search(pattern, proc.stdout, re.IGNORECASE)
+                            if match:
+                                duration_ms = float(match.group(1))
+                                break
+
+                    # Wall-clock fallback
+                    if duration_ms is None and wall_ms > 100:
+                        duration_ms = wall_ms
+
+                else:
+                    logger.warning(
+                        f"Script benchmark failed for {source_file}: "
+                        f"exit {proc.returncode}: {proc.stderr[:300]}"
+                    )
+                    # Try without --benchmark
+                    cmd_plain = [python_bin, abs_source]
+                    t0 = _time.monotonic()
+                    proc2 = subprocess.run(
+                        cmd_plain,
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                        cwd=working_dir,
+                        env=env,
+                    )
+                    wall_ms = (_time.monotonic() - t0) * 1000.0
+                    if proc2.returncode == 0 and wall_ms > 100:
+                        duration_ms = wall_ms
+
+            except subprocess.TimeoutExpired:
+                return PerformanceResult(
+                    success=False,
+                    errors=f"Script benchmark timed out ({timeout}s) for {source_file}",
+                )
+            except Exception as e:
+                return PerformanceResult(success=False, errors=str(e))
+
+            if duration_ms is not None:
+                all_metrics.append(
+                    MetricResult(
+                        name=f"duration_ms", value=round(duration_ms, 4), unit="ms"
+                    )
+                )
+                kernel_metrics_list.append(
+                    KernelMetrics(
+                        kernel_name=Path(source_file).stem,
+                        dispatch_id=src_idx,
+                        duration_ns=duration_ms * 1e6,
+                    )
+                )
+            else:
+                all_metrics.append(
+                    MetricResult(name="duration_ms", value=None, unit="ms")
+                )
+
+        has_timing = any(m.value is not None for m in all_metrics)
+        return PerformanceResult(
+            success=has_timing,
+            metrics=all_metrics,
+            kernel_metrics=kernel_metrics_list,
+            errors=None if has_timing else "Could not extract timing from any kernel script",
+        )
 
     def _run_rocprof_compute_on_testcase(
         self, kernel_cfg: KernelEvalConfig

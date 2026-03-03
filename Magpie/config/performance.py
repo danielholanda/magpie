@@ -24,6 +24,7 @@ class PerfBackend(Enum):
 
     ROCPROF_COMPUTE = auto()  # rocprof-compute for HIP/AMD GPUs
     NCU = auto()  # NVIDIA Nsight Compute for CUDA
+    SCRIPT_BENCHMARK = auto()  # Run script with --benchmark, parse BENCHMARK_MS
     NONE = auto()  # No profiling
 
 
@@ -247,6 +248,8 @@ class PerformanceConfig:
                 self.backend = PerfBackend.ROCPROF_COMPUTE
             elif self.kernel_type == KernelType.CUDA:
                 self.backend = PerfBackend.NCU
+            elif self.kernel_type == KernelType.TRITON:
+                self.backend = PerfBackend.SCRIPT_BENCHMARK
             else:
                 self.backend = PerfBackend.NONE
 

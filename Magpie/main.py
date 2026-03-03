@@ -64,6 +64,7 @@ def parse_kernel_type(type_str: str) -> KernelType:
         "pytorch": KernelType.PYTORCH,
         "torch": KernelType.PYTORCH,
         "py": KernelType.PYTORCH,
+        "triton": KernelType.TRITON,
     }
     return type_map.get(type_str.lower(), KernelType.HIP)
 
@@ -836,7 +837,7 @@ def create_parser() -> argparse.ArgumentParser:
         "--type",
         type=str,
         default="hip",
-        choices=["hip", "cuda", "pytorch"],
+        choices=["hip", "cuda", "pytorch", "triton"],
         help="Kernel type",
     )
     analyze_parser.add_argument(
@@ -868,7 +869,7 @@ def create_parser() -> argparse.ArgumentParser:
         "--type",
         type=str,
         default="hip",
-        choices=["hip", "cuda", "pytorch"],
+        choices=["hip", "cuda", "pytorch", "triton"],
         help="Kernel type",
     )
     compare_parser.add_argument(

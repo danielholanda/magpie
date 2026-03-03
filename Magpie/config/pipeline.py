@@ -23,6 +23,7 @@ class KernelType(Enum):
     PYTORCH = auto()  # PyTorch kernel
     HIP = auto()  # HIP/ROCm kernel
     CUDA = auto()  # CUDA kernel
+    TRITON = auto()  # Triton kernel (.py, JIT-compiled)
 
 
 class EvalMode(Enum):

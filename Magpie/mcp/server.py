@@ -165,7 +165,7 @@ def analyze(
     Args:
         kernel_path: Path to kernel source file (.hip, .cu, .py)
         testcase_command: Command to run the test case
-        kernel_type: "hip", "cuda", or "pytorch"
+        kernel_type: "hip", "cuda", "pytorch", or "triton"
         working_dir: Working directory (default: kernel's parent dir)
         compile_command: Custom compile command (optional)
         check_performance: Run performance profiling (default: True)
@@ -192,6 +192,7 @@ def analyze(
             "cuda": KernelType.CUDA,
             "pytorch": KernelType.PYTORCH,
             "torch": KernelType.PYTORCH,
+            "triton": KernelType.TRITON,
         }
         ktype = type_map.get(kernel_type.lower(), KernelType.HIP)
 
@@ -452,7 +453,7 @@ def compare(
     Args:
         kernel_paths: List of kernel source file paths (minimum 2)
         testcase_commands: List of test commands for each kernel (REQUIRED, must match kernel_paths length)
-        kernel_type: "hip", "cuda", or "pytorch"
+        kernel_type: "hip", "cuda", "pytorch", or "triton"
         baseline_index: Index of baseline kernel for comparison (default: 0)
         check_performance: Run performance profiling (default: True)
         environment: Execution environment "local" or "container"
@@ -483,6 +484,7 @@ def compare(
             "hip": KernelType.HIP,
             "cuda": KernelType.CUDA,
             "pytorch": KernelType.PYTORCH,
+            "triton": KernelType.TRITON,
         }
         ktype = type_map.get(kernel_type.lower(), KernelType.HIP)
 
@@ -678,7 +680,7 @@ def discover_kernels(
 
     Args:
         project_path: Root path of the project to scan
-        kernel_type: Type of kernels to find: "hip", "cuda", or "all"
+        kernel_type: Type of kernels to find: "hip", "cuda", "triton", or "all"
         include_tests: Include test directories in search
         include_examples: Include example directories in search
 
@@ -699,6 +701,8 @@ def discover_kernels(
             extensions.update({".hip", ".cpp"})
         if kernel_type in ("cuda", "all"):
             extensions.update({".cu", ".cuh"})
+        if kernel_type in ("triton", "all"):
+            extensions.update({".py"})
 
         # Find source files using os.walk (faster, can skip directories)
         discovered = []
@@ -732,7 +736,7 @@ def discover_kernels(
                 # Generate suggested config (defer binary search for performance)
                 suggested_config = {
                     "kernel_path": str(source_file),
-                    "kernel_type": "hip" if ext in (".hip", ".cpp") else "cuda",
+                    "kernel_type": "hip" if ext in (".hip", ".cpp") else ("triton" if ext == ".py" else "cuda"),
                     "working_dir": str(project / "build")
                     if (project / "build").exists()
                     else str(project),
@@ -1003,7 +1007,7 @@ def create_kernel_config(
         kernel_id: Unique identifier for the kernel
         kernel_path: Path to the kernel source file
         testcase_command: Command to run the test case
-        kernel_type: "hip", "cuda", or "pytorch"
+        kernel_type: "hip", "cuda", "pytorch", or "triton"
         working_dir: Working directory for execution
         compile_command: Custom compile command (optional)
         output_path: DEPRECATED - file saving is disabled for safety

@@ -158,6 +158,10 @@ class Correctness:
         if kernel_cfg.kernel_type == KernelType.PYTORCH:
             return self._run_pytorch_comparison(eval_state, kernel_cfg)
 
+        # Triton kernels: run script directly, check exit code and PASS
+        if kernel_cfg.kernel_type == KernelType.TRITON:
+            return self._run_triton_comparison(eval_state, kernel_cfg)
+
         # For HIP/CUDA without testcase, we need exec to compare outputs
         return CorrectnessResult(
             success=False,
@@ -314,6 +318,88 @@ class Correctness:
 
             return CorrectnessResult(success=True, metrics=all_metrics)
 
+        except Exception as e:
+            return CorrectnessResult(success=False, errors=str(e))
+
+    def _run_triton_comparison(
+        self, eval_state: Any, kernel_cfg: KernelEvalConfig
+    ) -> CorrectnessResult:
+        """
+        Run Triton kernel correctness check.
+
+        Triton kernels are standalone .py scripts with a __main__ block that:
+        - Runs the kernel with test inputs
+        - Compares output against a reference (baseline or torch)
+        - Prints "PASS" on success
+        - Exits with code 0 on success, non-zero on failure
+
+        This method runs each source file and checks for success.
+        """
+        source_files = kernel_cfg.get_source_file_paths()
+        if not source_files:
+            return CorrectnessResult(success=False, errors="No source files provided")
+
+        working_dir = kernel_cfg.working_dir
+        env = get_updated_env(kernel_cfg.env)
+        n_iter = self.corr_cfg.iteration_count or 1
+        all_metrics = []
+
+        try:
+            import sys as _sys
+
+            python_bin = _sys.executable or "python3"
+
+            for source_file in source_files:
+                abs_source = str(Path(source_file).resolve())
+                for i in range(n_iter):
+                    result = subprocess.run(
+                        [python_bin, abs_source],
+                        capture_output=True,
+                        text=True,
+                        env=env,
+                        cwd=working_dir,
+                        timeout=120,
+                    )
+
+                    if result.returncode != 0:
+                        all_metrics.append(
+                            MetricResult(
+                                name=f"triton_run_{i + 1}",
+                                success=False,
+                                value=float(result.returncode),
+                            )
+                        )
+                        stderr_snippet = (result.stderr or result.stdout)[:500]
+                        return CorrectnessResult(
+                            success=False,
+                            metrics=all_metrics,
+                            errors=f"Triton kernel failed (iteration {i + 1}): {stderr_snippet}",
+                        )
+
+                    stdout_lower = result.stdout.lower()
+                    if "fail" in stdout_lower or "error" in stdout_lower:
+                        if "pass" not in stdout_lower:
+                            all_metrics.append(
+                                MetricResult(
+                                    name=f"triton_run_{i + 1}", success=False
+                                )
+                            )
+                            return CorrectnessResult(
+                                success=False,
+                                metrics=all_metrics,
+                                errors=f"Triton kernel reported failure (iteration {i + 1}): {result.stdout[:500]}",
+                            )
+
+                    all_metrics.append(
+                        MetricResult(name=f"triton_run_{i + 1}", success=True)
+                    )
+
+            return CorrectnessResult(success=True, metrics=all_metrics)
+
+        except subprocess.TimeoutExpired:
+            return CorrectnessResult(
+                success=False, errors="Triton kernel timed out (120s)"
+            )
         except Exception as e:
             return CorrectnessResult(success=False, errors=str(e))
 
