@@ -730,11 +730,18 @@ def run_benchmark(args, config: Dict[str, Any]) -> int:
             "benchmark_script": args.benchmark_script,
             "timeout_seconds": args.timeout,
         }
+        if args.run_mode:
+            benchmark_cfg["run_mode"] = args.run_mode
     else:
         logger.error("Benchmark mode requires either --benchmark-config or (framework and --model)")
         print("Error: Specify --benchmark-config or provide framework and --model")
         print("Example: python -m Magpie benchmark sglang --model meta-llama/Llama-2-7b-hf")
         return 1
+    
+    # CLI --run-mode overrides YAML config
+    run_mode = getattr(args, "run_mode", None)
+    if run_mode:
+        benchmark_cfg["run_mode"] = run_mode
     
     # Get benchmark settings from framework config
     bench_settings = config.get("benchmark", {})
@@ -919,6 +926,12 @@ def create_parser() -> argparse.ArgumentParser:
     benchmark_parser.add_argument(
         "--system-profiler", action="store_true",
         help="Enable system profiler (rocprof/ncu)"
+    )
+    benchmark_parser.add_argument(
+        "--run-mode", type=str, default=None,
+        choices=["docker", "local"],
+        help="Execution mode: 'docker' (default) runs inside a container; "
+             "'local' runs directly on the host (useful inside pods/containers)"
     )
     benchmark_parser.add_argument(
         "--docker-image", type=str, help="Override Docker image"

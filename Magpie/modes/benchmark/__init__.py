@@ -13,7 +13,7 @@ This module provides:
 """
 
 from .config import (
-    BenchmarkConfig, ProfilerConfig, TorchProfilerConfig,
+    BenchmarkConfig, BenchmarkRunMode, ProfilerConfig, TorchProfilerConfig,
     SystemProfilerConfig, GapAnalysisConfig,
 )
 from .benchmarker import BenchmarkMode
