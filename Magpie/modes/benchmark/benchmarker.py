@@ -114,9 +114,14 @@ class BenchmarkMode:
             )
             logger.info("Running benchmark locally (no Docker)")
             logger.debug(f"Local command: {' '.join(local_cmd)}")
-            result, stdout, stderr = self._execute_local_benchmark(
-                local_cmd, local_env, workspace,
-            )
+
+            symlink = self._create_workspace_symlink(workspace)
+            try:
+                result, stdout, stderr = self._execute_local_benchmark(
+                    local_cmd, local_env, workspace,
+                )
+            finally:
+                self._remove_workspace_symlink(symlink)
         else:
             docker_image = self._select_image()
             docker_cmd = self._build_docker_command(
@@ -165,23 +170,28 @@ class BenchmarkMode:
         # Parse torch trace if available
         if self.config.profiler.torch_profiler.enabled:
             torch_trace_dir = workspace / "torch_trace"
-            kernels = ResultParser.parse_torch_trace(torch_trace_dir)
-            result.kernel_summary = kernels
-            # Get top 10 bottlenecks
-            result.top_bottlenecks = [k.name for k in kernels[:10]]
-            
-            # Run TraceLens analysis if enabled
-            # Note: TraceLens runs on the HOST (not in container) after benchmark completes.
-            if self.config.profiler.tracelens.enabled:
-                tracelens_result = self._run_tracelens_analysis(
-                    torch_trace_dir, workspace
-                )
-                result.tracelens_analysis = tracelens_result
-            
-            # Run gap analysis if enabled
-            if self.config.gap_analysis.enabled:
-                gap_result = self._run_gap_analysis(torch_trace_dir, workspace)
-                result.gap_analysis = gap_result
+            trace_files = list(torch_trace_dir.glob("*.json.gz")) if torch_trace_dir.is_dir() else []
+            has_traces = len(trace_files) > 0
+
+            if not result.success or not has_traces:
+                if not has_traces:
+                    logger.warning("No torch trace files found, skipping trace analysis / gap analysis")
+                else:
+                    logger.warning("Benchmark failed, skipping trace analysis / gap analysis")
+            else:
+                kernels = ResultParser.parse_torch_trace(torch_trace_dir)
+                result.kernel_summary = kernels
+                result.top_bottlenecks = [k.name for k in kernels[:10]]
+
+                if self.config.profiler.tracelens.enabled:
+                    tracelens_result = self._run_tracelens_analysis(
+                        torch_trace_dir, workspace
+                    )
+                    result.tracelens_analysis = tracelens_result
+
+                if self.config.gap_analysis.enabled:
+                    gap_result = self._run_gap_analysis(torch_trace_dir, workspace)
+                    result.gap_analysis = gap_result
         
         # Save report
         self.workspace_mgr.save_report(result.to_dict())
@@ -357,6 +367,43 @@ class BenchmarkMode:
         
         return cmd
     
+    def _create_workspace_symlink(self, workspace: Path) -> Optional[Path]:
+        """
+        Create /workspace symlink pointing to the real workspace directory.
+        
+        Many InferenceMAX scripts hardcode /workspace/ for result-dir and
+        server logs.  A symlink makes them work transparently in local mode.
+        
+        Returns:
+            The symlink Path if created, None if /workspace already exists.
+        """
+        target = Path("/workspace")
+        if target.exists() or target.is_symlink():
+            logger.debug(f"/workspace already exists, skipping symlink")
+            return None
+        try:
+            target.symlink_to(workspace)
+            logger.info(f"Created symlink /workspace -> {workspace}")
+            return target
+        except OSError as e:
+            logger.warning(
+                f"Could not create /workspace symlink ({e}). "
+                f"Scripts that hardcode /workspace/ may write results to the wrong location."
+            )
+            return None
+
+    @staticmethod
+    def _remove_workspace_symlink(symlink: Optional[Path]) -> None:
+        """Remove the /workspace symlink created by _create_workspace_symlink."""
+        if symlink is None:
+            return
+        try:
+            if symlink.is_symlink():
+                symlink.unlink()
+                logger.info(f"Removed symlink {symlink}")
+        except OSError as e:
+            logger.warning(f"Could not remove symlink {symlink}: {e}")
+
     def _build_local_command(
         self,
         workspace: Path,
@@ -442,7 +489,7 @@ class BenchmarkMode:
             stdout = process.stdout or ""
             stderr = process.stderr or ""
 
-            self._save_container_logs(workspace, stdout, stderr)
+            self._save_logs(workspace, stdout, stderr)
 
             if process.returncode == 0:
                 result.success = True
@@ -471,7 +518,7 @@ class BenchmarkMode:
             if hasattr(e, "stderr") and e.stderr:
                 stderr = e.stderr if isinstance(e.stderr, str) else e.stderr.decode()
 
-            self._save_container_logs(workspace, stdout, stderr)
+            self._save_logs(workspace, stdout, stderr)
 
         except Exception as e:
             result.errors.append(f"Benchmark execution error: {str(e)}")
@@ -567,7 +614,7 @@ class BenchmarkMode:
             stderr = process.stderr or ""
             
             # Save logs to workspace for debugging
-            self._save_container_logs(workspace, stdout, stderr)
+            self._save_logs(workspace, stdout, stderr)
             
             if process.returncode == 0:
                 result.success = True
@@ -594,7 +641,7 @@ class BenchmarkMode:
             if hasattr(e, 'stderr') and e.stderr:
                 stderr = e.stderr if isinstance(e.stderr, str) else e.stderr.decode()
             
-            self._save_container_logs(workspace, stdout, stderr)
+            self._save_logs(workspace, stdout, stderr)
             
             # Try to stop the container
             try:
@@ -612,29 +659,22 @@ class BenchmarkMode:
         
         return result, stdout, stderr
     
-    def _save_container_logs(self, workspace: Path, stdout: str, stderr: str) -> None:
-        """
-        Save container stdout/stderr to workspace for debugging.
-        
-        Args:
-            workspace: Workspace directory
-            stdout: Container stdout
-            stderr: Container stderr
-        """
+    def _save_logs(self, workspace: Path, stdout: str, stderr: str) -> None:
+        """Save benchmark subprocess stdout/stderr to workspace for debugging."""
         try:
             if stdout:
-                stdout_file = workspace / "container_stdout.log"
-                with open(stdout_file, 'w') as f:
+                out_file = workspace / "benchmark_stdout.log"
+                with open(out_file, 'w') as f:
                     f.write(stdout)
-                logger.debug(f"Saved container stdout to {stdout_file}")
+                logger.debug(f"Saved stdout to {out_file}")
             
             if stderr:
-                stderr_file = workspace / "container_stderr.log"
-                with open(stderr_file, 'w') as f:
+                err_file = workspace / "benchmark_stderr.log"
+                with open(err_file, 'w') as f:
                     f.write(stderr)
-                logger.debug(f"Saved container stderr to {stderr_file}")
+                logger.debug(f"Saved stderr to {err_file}")
         except Exception as e:
-            logger.warning(f"Failed to save container logs: {e}")
+            logger.warning(f"Failed to save logs: {e}")
     
     def _run_tracelens_analysis(
         self,

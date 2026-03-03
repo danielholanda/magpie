@@ -58,7 +58,7 @@ run_benchmark_serving \
     --num-prompts $(( $CONC * 10 )) \
     --max-concurrency "$CONC" \
     --result-filename "$RESULT_FILENAME" \
-    --result-dir /workspace/
+    --result-dir "${RESULT_DIR:-/workspace/}"
 
 # After throughput, run evaluation only if RUN_EVAL is true
 if [ "${RUN_EVAL}" = "true" ]; then

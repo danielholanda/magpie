@@ -68,7 +68,7 @@ run_benchmark_serving \
     --num-prompts $(( $CONC * 10 )) \
     --max-concurrency "$CONC" \
     --result-filename "$RESULT_FILENAME" \
-    --result-dir /workspace/ \
+    --result-dir "${RESULT_DIR:-/workspace/}" \
     --server-pid "$SERVER_PID" \
     --trust-remote-code
 
