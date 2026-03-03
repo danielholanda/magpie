@@ -1072,6 +1072,7 @@ def benchmark(
     framework: str,
     model: str,
     precision: str = "fp8",
+    run_mode: str = "docker",
     tp: int = 1,
     concurrency: int = 32,
     input_len: int = 1024,
@@ -1092,9 +1093,9 @@ def benchmark(
     """
     Run a framework-level LLM inference benchmark (vLLM or SGLang).
 
-    Launches the inference server inside a Docker container using InferenceMAX
-    scripts, runs a benchmark client, and collects throughput/latency metrics.
-    Optionally collects torch profiler traces and runs TraceLens analysis.
+    Launches the inference server using InferenceMAX scripts, runs a benchmark
+    client, and collects throughput/latency metrics. Optionally collects torch
+    profiler traces and runs TraceLens analysis.
 
     InferenceMAX is auto-cloned if not present.
 
@@ -1102,6 +1103,8 @@ def benchmark(
         framework: "vllm" or "sglang"
         model: HuggingFace model name (e.g., "deepseek-ai/DeepSeek-R1-0528")
         precision: Model precision - "fp8", "fp16", "bf16", or "fp4" (default: "fp8")
+        run_mode: Execution mode - "docker" (default) runs inside a container;
+            "local" runs directly on the host (useful inside pods/containers)
         tp: Tensor parallelism / number of GPUs (default: 1)
         concurrency: Request concurrency (default: 32)
         input_len: Input sequence length (default: 1024)
@@ -1117,7 +1120,7 @@ def benchmark(
         runner_type: Hardware runner type (e.g., "mi300x", "h100") - auto-detected if omitted
         timeout_seconds: Benchmark timeout in seconds (default: 3600)
         output_dir: Base directory for results (default: "./results")
-        extra_envs: Additional environment variables passed to the Docker container
+        extra_envs: Additional environment variables passed to the benchmark
 
     Returns:
         JSON with benchmark results including:
@@ -1160,6 +1163,7 @@ def benchmark(
             "framework": framework,
             "model": model,
             "precision": precision,
+            "run_mode": run_mode,
             "envs": envs,
             "profiler": profiler_cfg,
             "docker_image": docker_image,
