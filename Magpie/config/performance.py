@@ -24,7 +24,6 @@ class PerfBackend(Enum):
 
     ROCPROF_COMPUTE = auto()  # rocprof-compute for HIP/AMD GPUs
     NCU = auto()  # NVIDIA Nsight Compute for CUDA
-    SCRIPT_BENCHMARK = auto()  # Run script with --benchmark, parse BENCHMARK_MS
     NONE = auto()  # No profiling
 
 
@@ -223,8 +222,11 @@ class PerformanceConfig:
 
     Attributes:
         enabled: Whether to enable performance evaluation
-        backend: Profiling backend (auto-selected based on kernel_type if not specified)
+        backend: Profiling backend (auto-selected based on kernel_type/gpu_arch if not specified)
         kernel_type: Kernel type (used for auto-selecting backend)
+        gpu_arch: GPU architecture string (e.g. "gfx942", "sm_90") for
+                  cross-platform kernels like Triton where the profiler
+                  depends on the target GPU, not the source language.
         timeout_seconds: Maximum execution time per profiling run
         profiler_args: Additional arguments for the profiler (legacy, use rocprof_config or ncu_config)
         rocprof_config: Configuration for rocprof-compute
@@ -234,6 +236,7 @@ class PerformanceConfig:
     enabled: bool = True
     backend: Optional[PerfBackend] = None
     kernel_type: Optional["KernelType"] = None
+    gpu_arch: Optional[str] = None
     timeout_seconds: float = 120.0
     profiler_args: List[str] = field(default_factory=list)  # Legacy
     rocprof_config: Optional[RocprofComputeConfig] = None
@@ -249,7 +252,7 @@ class PerformanceConfig:
             elif self.kernel_type == KernelType.CUDA:
                 self.backend = PerfBackend.NCU
             elif self.kernel_type == KernelType.TRITON:
-                self.backend = PerfBackend.SCRIPT_BENCHMARK
+                self.backend = self._backend_for_gpu_arch()
             else:
                 self.backend = PerfBackend.NONE
 
@@ -258,6 +261,19 @@ class PerformanceConfig:
             self.rocprof_config = RocprofComputeConfig()
         if self.ncu_config is None:
             self.ncu_config = NcuConfig()
+
+    def _backend_for_gpu_arch(self) -> PerfBackend:
+        """Select profiling backend based on detected GPU architecture.
+
+        Triton JIT-compiles to HIP on AMD and CUDA on NVIDIA, so we use the
+        same system profiler as native kernels on each platform.
+        """
+        if self.gpu_arch:
+            if self.gpu_arch.startswith("gfx"):
+                return PerfBackend.ROCPROF_COMPUTE
+            if self.gpu_arch.startswith("sm_"):
+                return PerfBackend.NCU
+        return PerfBackend.NONE
 
     def get_backend(self) -> PerfBackend:
         """Get the performance backend."""

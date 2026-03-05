@@ -73,16 +73,20 @@ class PipelineConfig:
     verbose: bool = False
 
     def __post_init__(self):
+        # Auto-detect GPU architecture first — needed by PerformanceConfig
+        # to choose the right profiler for cross-platform kernels (Triton).
+        if self.gpu_arch is None:
+            self.gpu_arch = self._detect_gpu_arch()
+
         if self.compiling_config is None:
             self.compiling_config = CompilingConfig()
         if self.correctness_config is None:
             self.correctness_config = CorrectnessConfig()
         if self.performance_config is None:
-            self.performance_config = PerformanceConfig(kernel_type=self.kernel_type)
-
-        # Auto-detect GPU architecture if not specified
-        if self.gpu_arch is None:
-            self.gpu_arch = self._detect_gpu_arch()
+            self.performance_config = PerformanceConfig(
+                kernel_type=self.kernel_type,
+                gpu_arch=self.gpu_arch,
+            )
 
     def _detect_gpu_arch(self) -> str:
         """Auto-detect GPU architecture."""
