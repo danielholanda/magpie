@@ -18,6 +18,12 @@ class BenchmarkFramework(Enum):
     SGLANG = "sglang"
 
 
+class BenchmarkRunMode(Enum):
+    """Benchmark execution mode."""
+    DOCKER = "docker"
+    LOCAL = "local"
+
+
 class TraceLensExportFormat(Enum):
     """TraceLens export format options."""
     CSV = "csv"
@@ -262,6 +268,7 @@ class BenchmarkConfig:
         framework: Benchmark framework ("vllm" or "sglang")
         model: Model name or path (e.g., "meta-llama/Llama-2-7b-hf")
         precision: Model precision ("fp8", "fp16", "bf16", "fp4")
+        run_mode: Execution mode - "docker" (default) or "local"
         envs: Environment variables for benchmark (TP, CONC, ISL, OSL, etc.)
         profiler: Profiler configuration
         docker_image: Override automatic image selection
@@ -274,6 +281,9 @@ class BenchmarkConfig:
     framework: str
     model: str
     precision: str = "fp8"
+    
+    # Execution mode: "docker" or "local"
+    run_mode: str = "docker"
     
     # Environment variables for benchmark
     envs: Dict[str, Any] = field(default_factory=dict)
@@ -303,6 +313,11 @@ class BenchmarkConfig:
         self.framework = self.framework.lower()
         if self.framework not in ["vllm", "sglang"]:
             raise ValueError(f"Unsupported framework: {self.framework}. Use 'vllm' or 'sglang'.")
+        
+        # Validate run_mode
+        self.run_mode = self.run_mode.lower()
+        if self.run_mode not in ("docker", "local"):
+            raise ValueError(f"Unsupported run_mode: {self.run_mode}. Use 'docker' or 'local'.")
         
         # Set default envs if not provided
         if not self.envs:
@@ -360,12 +375,18 @@ class BenchmarkConfig:
         # For now, use a generic experiment name
         return f"generic_{self.precision}_{runner}.sh"
     
+    @property
+    def is_local(self) -> bool:
+        """Check if running in local mode (no Docker)."""
+        return self.run_mode == "local"
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
             "framework": self.framework,
             "model": self.model,
             "precision": self.precision,
+            "run_mode": self.run_mode,
             "envs": self.envs,
             "profiler": self.profiler.to_dict(),
             "gap_analysis": self.gap_analysis.to_dict(),
@@ -391,6 +412,7 @@ class BenchmarkConfig:
             framework=data.get("framework", "sglang"),
             model=data.get("model", ""),
             precision=data.get("precision", "fp8"),
+            run_mode=data.get("run_mode", "docker"),
             envs=data.get("envs", {}),
             profiler=profiler,
             gap_analysis=gap_analysis,

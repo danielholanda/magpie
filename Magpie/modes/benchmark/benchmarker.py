@@ -34,7 +34,8 @@ class BenchmarkMode:
     Benchmark mode for framework-level profiling.
     
     Uses InferenceMAX as backend to run vLLM/SGLang benchmarks
-    inside Docker containers.
+    either inside Docker containers (run_mode=docker) or directly
+    on the host (run_mode=local).
     """
     
     def __init__(
@@ -105,21 +106,32 @@ class BenchmarkMode:
         # 4. Create workspace
         workspace = self.workspace_mgr.create(self.config.to_dict())
         
-        # 5. Select Docker image
-        docker_image = self._select_image()
-        
-        # 6. Build Docker command
-        docker_cmd = self._build_docker_command(
-            docker_image=docker_image,
-            workspace=workspace,
-            runner_type=runner_type,
-        )
-        
-        # 7. Execute benchmark
-        logger.info(f"Running benchmark in container with image: {docker_image}")
-        logger.debug(f"Docker command: {' '.join(docker_cmd)}")
-        
-        result, stdout, stderr = self._execute_benchmark(docker_cmd, workspace)
+        # 5-7. Build and execute (Docker or local)
+        if self.config.is_local:
+            local_cmd, local_env = self._build_local_command(
+                workspace=workspace,
+                runner_type=runner_type,
+            )
+            logger.info("Running benchmark locally (no Docker)")
+            logger.debug(f"Local command: {' '.join(local_cmd)}")
+
+            symlink = self._create_workspace_symlink(workspace)
+            try:
+                result, stdout, stderr = self._execute_local_benchmark(
+                    local_cmd, local_env, workspace,
+                )
+            finally:
+                self._remove_workspace_symlink(symlink)
+        else:
+            docker_image = self._select_image()
+            docker_cmd = self._build_docker_command(
+                docker_image=docker_image,
+                workspace=workspace,
+                runner_type=runner_type,
+            )
+            logger.info(f"Running benchmark in container with image: {docker_image}")
+            logger.debug(f"Docker command: {' '.join(docker_cmd)}")
+            result, stdout, stderr = self._execute_benchmark(docker_cmd, workspace)
         
         # 8. Collect results
         result.workspace_dir = str(workspace)
@@ -142,12 +154,13 @@ class BenchmarkMode:
             if parsed.errors:
                 result.errors.extend(parsed.errors)
         else:
-            # Result file not found - benchmark likely failed inside container
             result.success = False
-            result.errors.append("inferencemax_result.json not found - benchmark may have failed inside container")
+            mode_label = "locally" if self.config.is_local else "inside container"
+            result.errors.append(
+                f"inferencemax_result.json not found - benchmark may have failed {mode_label}"
+            )
             if stderr:
-                # Add last 500 chars of stderr for debugging
-                result.errors.append(f"Container stderr (last 500 chars): {stderr[-500:]}")
+                result.errors.append(f"stderr (last 500 chars): {stderr[-500:]}")
         
         # Validate that we got actual results
         if result.success and not self._validate_results(result):
@@ -157,23 +170,28 @@ class BenchmarkMode:
         # Parse torch trace if available
         if self.config.profiler.torch_profiler.enabled:
             torch_trace_dir = workspace / "torch_trace"
-            kernels = ResultParser.parse_torch_trace(torch_trace_dir)
-            result.kernel_summary = kernels
-            # Get top 10 bottlenecks
-            result.top_bottlenecks = [k.name for k in kernels[:10]]
-            
-            # Run TraceLens analysis if enabled
-            # Note: TraceLens runs on the HOST (not in container) after benchmark completes.
-            if self.config.profiler.tracelens.enabled:
-                tracelens_result = self._run_tracelens_analysis(
-                    torch_trace_dir, workspace
-                )
-                result.tracelens_analysis = tracelens_result
-            
-            # Run gap analysis if enabled
-            if self.config.gap_analysis.enabled:
-                gap_result = self._run_gap_analysis(torch_trace_dir, workspace)
-                result.gap_analysis = gap_result
+            trace_files = list(torch_trace_dir.glob("*.json.gz")) if torch_trace_dir.is_dir() else []
+            has_traces = len(trace_files) > 0
+
+            if not result.success or not has_traces:
+                if not has_traces:
+                    logger.warning("No torch trace files found, skipping trace analysis / gap analysis")
+                else:
+                    logger.warning("Benchmark failed, skipping trace analysis / gap analysis")
+            else:
+                kernels = ResultParser.parse_torch_trace(torch_trace_dir)
+                result.kernel_summary = kernels
+                result.top_bottlenecks = [k.name for k in kernels[:10]]
+
+                if self.config.profiler.tracelens.enabled:
+                    tracelens_result = self._run_tracelens_analysis(
+                        torch_trace_dir, workspace
+                    )
+                    result.tracelens_analysis = tracelens_result
+
+                if self.config.gap_analysis.enabled:
+                    gap_result = self._run_gap_analysis(torch_trace_dir, workspace)
+                    result.gap_analysis = gap_result
         
         # Save report
         self.workspace_mgr.save_report(result.to_dict())
@@ -349,6 +367,165 @@ class BenchmarkMode:
         
         return cmd
     
+    def _create_workspace_symlink(self, workspace: Path) -> Optional[Path]:
+        """
+        Create /workspace symlink pointing to the real workspace directory.
+        
+        Many InferenceMAX scripts hardcode /workspace/ for result-dir and
+        server logs.  A symlink makes them work transparently in local mode.
+        
+        Returns:
+            The symlink Path if created, None if /workspace already exists.
+        """
+        target = Path("/workspace")
+        if target.exists() or target.is_symlink():
+            logger.debug(f"/workspace already exists, skipping symlink")
+            return None
+        try:
+            target.symlink_to(workspace)
+            logger.info(f"Created symlink /workspace -> {workspace}")
+            return target
+        except OSError as e:
+            logger.warning(
+                f"Could not create /workspace symlink ({e}). "
+                f"Scripts that hardcode /workspace/ may write results to the wrong location."
+            )
+            return None
+
+    @staticmethod
+    def _remove_workspace_symlink(symlink: Optional[Path]) -> None:
+        """Remove the /workspace symlink created by _create_workspace_symlink."""
+        if symlink is None:
+            return
+        try:
+            if symlink.is_symlink():
+                symlink.unlink()
+                logger.info(f"Removed symlink {symlink}")
+        except OSError as e:
+            logger.warning(f"Could not remove symlink {symlink}: {e}")
+
+    def _build_local_command(
+        self,
+        workspace: Path,
+        runner_type: str,
+    ) -> tuple:
+        """
+        Build command and environment for local (non-Docker) execution.
+        
+        Runs the benchmark script directly on the host via bash.
+        Useful when already inside a container/pod with the required
+        runtime (vLLM/SGLang) installed.
+        
+        Args:
+            workspace: Workspace directory path
+            runner_type: InferenceMAX runner type
+        
+        Returns:
+            Tuple of (command list, environment dict)
+        """
+        benchmark_script = self._get_benchmark_script(runner_type)
+        inferencemax_path = str(Path(self.config.inferencemax_path).resolve())
+
+        cmd = [
+            "bash", "-c",
+            f"cd {inferencemax_path} && bash {benchmark_script}",
+        ]
+
+        env = os.environ.copy()
+
+        env_vars = self.config.get_env_vars()
+        env_vars["RESULT_FILENAME"] = "inferencemax_result"
+        env_vars["RESULT_DIR"] = str(workspace)
+        env_vars["RUNNER_TYPE"] = runner_type
+
+        if self.config.profiler.torch_profiler.enabled:
+            torch_trace_dir = workspace / "torch_trace"
+            torch_trace_dir.mkdir(parents=True, exist_ok=True)
+            env_vars["PROFILE"] = "1"
+            env_vars["VLLM_TORCH_PROFILER_DIR"] = str(torch_trace_dir)
+            env_vars["SGLANG_TORCH_PROFILER_DIR"] = str(torch_trace_dir)
+
+        hf_token = os.environ.get("HF_TOKEN", "")
+        if hf_token:
+            env_vars["HF_TOKEN"] = hf_token
+
+        env_vars["SERVER_LOG"] = str(workspace / "server.log")
+
+        for key, value in env_vars.items():
+            env[key] = str(value)
+
+        return cmd, env
+
+    def _execute_local_benchmark(
+        self,
+        cmd: List[str],
+        env: Dict[str, str],
+        workspace: Path,
+    ) -> tuple:
+        """
+        Execute benchmark locally (no Docker).
+        
+        Args:
+            cmd: Shell command list
+            env: Environment variables
+            workspace: Workspace directory for saving logs
+        
+        Returns:
+            Tuple of (BenchmarkResult, stdout, stderr)
+        """
+        result = BenchmarkResult()
+        stdout = ""
+        stderr = ""
+
+        try:
+            process = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=self.config.timeout_seconds,
+                env=env,
+            )
+
+            stdout = process.stdout or ""
+            stderr = process.stderr or ""
+
+            self._save_logs(workspace, stdout, stderr)
+
+            if process.returncode == 0:
+                result.success = True
+                logger.info("Local benchmark completed successfully")
+            else:
+                result.success = False
+                result.errors.append(
+                    f"Benchmark process failed with code {process.returncode}"
+                )
+                if stderr:
+                    result.errors.append(f"stderr: {stderr[:1000]}")
+                logger.error(f"Benchmark failed: {process.returncode}")
+                logger.error(f"stderr: {stderr[:500]}")
+
+            if stdout:
+                logger.debug(f"stdout (last 500 chars): {stdout[-500:]}")
+
+        except subprocess.TimeoutExpired as e:
+            result.errors.append(
+                f"Benchmark timed out after {self.config.timeout_seconds}s"
+            )
+            logger.error("Benchmark timed out")
+
+            if hasattr(e, "stdout") and e.stdout:
+                stdout = e.stdout if isinstance(e.stdout, str) else e.stdout.decode()
+            if hasattr(e, "stderr") and e.stderr:
+                stderr = e.stderr if isinstance(e.stderr, str) else e.stderr.decode()
+
+            self._save_logs(workspace, stdout, stderr)
+
+        except Exception as e:
+            result.errors.append(f"Benchmark execution error: {str(e)}")
+            logger.exception(f"Benchmark execution failed: {e}")
+
+        return result, stdout, stderr
+
     def _get_benchmark_script(self, runner_type: str) -> str:
         """
         Get InferenceMAX benchmark script path with 3-tier priority.
@@ -437,7 +614,7 @@ class BenchmarkMode:
             stderr = process.stderr or ""
             
             # Save logs to workspace for debugging
-            self._save_container_logs(workspace, stdout, stderr)
+            self._save_logs(workspace, stdout, stderr)
             
             if process.returncode == 0:
                 result.success = True
@@ -464,7 +641,7 @@ class BenchmarkMode:
             if hasattr(e, 'stderr') and e.stderr:
                 stderr = e.stderr if isinstance(e.stderr, str) else e.stderr.decode()
             
-            self._save_container_logs(workspace, stdout, stderr)
+            self._save_logs(workspace, stdout, stderr)
             
             # Try to stop the container
             try:
@@ -482,29 +659,22 @@ class BenchmarkMode:
         
         return result, stdout, stderr
     
-    def _save_container_logs(self, workspace: Path, stdout: str, stderr: str) -> None:
-        """
-        Save container stdout/stderr to workspace for debugging.
-        
-        Args:
-            workspace: Workspace directory
-            stdout: Container stdout
-            stderr: Container stderr
-        """
+    def _save_logs(self, workspace: Path, stdout: str, stderr: str) -> None:
+        """Save benchmark subprocess stdout/stderr to workspace for debugging."""
         try:
             if stdout:
-                stdout_file = workspace / "container_stdout.log"
-                with open(stdout_file, 'w') as f:
+                out_file = workspace / "benchmark_stdout.log"
+                with open(out_file, 'w') as f:
                     f.write(stdout)
-                logger.debug(f"Saved container stdout to {stdout_file}")
+                logger.debug(f"Saved stdout to {out_file}")
             
             if stderr:
-                stderr_file = workspace / "container_stderr.log"
-                with open(stderr_file, 'w') as f:
+                err_file = workspace / "benchmark_stderr.log"
+                with open(err_file, 'w') as f:
                     f.write(stderr)
-                logger.debug(f"Saved container stderr to {stderr_file}")
+                logger.debug(f"Saved stderr to {err_file}")
         except Exception as e:
-            logger.warning(f"Failed to save container logs: {e}")
+            logger.warning(f"Failed to save logs: {e}")
     
     def _run_tracelens_analysis(
         self,
@@ -613,8 +783,7 @@ class BenchmarkMode:
     
     def cleanup(self) -> None:
         """Clean up resources."""
-        # Stop any running container
-        if self._task_id:
+        if self._task_id and not self.config.is_local:
             try:
                 subprocess.run(
                     ["docker", "stop", f"magpie-benchmark-{self._task_id}"],

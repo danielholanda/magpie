@@ -1,8 +1,11 @@
 # vLLM Benchmark Configuration for openai/gpt-oss-120b (FP4, MI355X)
 # ====================================================================
 #
-# Usage:
+# Usage (Docker - default):
 #   python -m Magpie benchmark --benchmark-config examples/benchmark_vllm_gptoss_120b.yaml
+#
+# Usage (Local - run directly on host, e.g. inside a pod):
+#   python -m Magpie benchmark --benchmark-config examples/benchmark_vllm_gptoss_120b.yaml --run-mode local
 #
 # Uses Magpie generic script vllm_mi355x.sh (compatible with vLLM v0.15.1)
 

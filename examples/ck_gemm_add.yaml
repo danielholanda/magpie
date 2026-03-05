@@ -10,13 +10,13 @@
 
 # Single kernel configuration for analyze mode
 kernel:
-  id: "ck_gemm_add_xdl"
+  id: "ck_gemm_add"
   type: hip
   source_files:
-    - "${CK_HOME}/test/gemm_add/test_gemm_add_xdl.cpp"
+    - "${CK_HOME}/test/gemm_add/test_gemm_add.cpp"
   # The compiled binary acts as both the executable and the test
   # compile_command:
-  #   - ["cmake", "-S", "${CK_HOME}", "-B", "${CK_HOME}/build", "-D", "CMAKE_PREFIX_PATH=/opt/rocm", "-D", "CMAKE_CXX_COMPILER=/opt/rocm/bin/hipcc", "-D", "CMAKE_BUILD_TYPE=Release", "-D", "GPU_TARGETS=gfx942"]
-  #   - ["cmake", "--build", "${CK_HOME}/build", "--target", "test_gemm_add_xdl", "-j8"]
-  testcase_command: "bin/test_gemm_add_xdl"
+  #   - ["cmake", "-S", "${CK_HOME}", "-B", "${CK_HOME}/build", "-D", "CMAKE_PREFIX_PATH=/opt/rocm", "-D", "CMAKE_CXX_COMPILER=/opt/rocm/bin/hipcc", "-D", "CMAKE_BUILD_TYPE=Release", "-D", "GPU_TARGETS=gfx950"]
+  #   - ["cmake", "--build", "${CK_HOME}/build", "--target", "test_gemm_add", "-j8"]
+  testcase_command: "bin/test_gemm_add"
   working_dir: "${CK_HOME}/build"
