@@ -21,6 +21,7 @@ Kernel Tools:
 
 Benchmark Tools:
   - benchmark: Run vLLM/SGLang framework benchmark in Docker
+  - gap_analysis: Run standalone gap analysis on existing torch profiler traces
   - list_benchmark_images: List available Docker images per framework/arch
   - list_benchmark_results: List previous benchmark workspaces and summaries
   - get_benchmark_result: Read detailed results from a specific benchmark run
@@ -1078,8 +1079,16 @@ def benchmark(
     input_len: int = 1024,
     output_len: int = 512,
     torch_profiler: bool = True,
+    system_profiler: bool = False,
     tracelens: bool = False,
     tracelens_export_format: str = "csv",
+    gap_analysis_enabled: bool = False,
+    gap_analysis_top_k: int = 20,
+    gap_analysis_start_pct: float = 0.0,
+    gap_analysis_end_pct: float = 100.0,
+    gap_analysis_min_duration_us: float = 0.0,
+    gap_analysis_categories: Optional[List[str]] = None,
+    gap_analysis_ignore_categories: Optional[List[str]] = None,
     docker_image: Optional[str] = None,
     gpu_arch: Optional[str] = None,
     inferencemax_path: str = "",
@@ -1095,7 +1104,7 @@ def benchmark(
 
     Launches the inference server using InferenceMAX scripts, runs a benchmark
     client, and collects throughput/latency metrics. Optionally collects torch
-    profiler traces and runs TraceLens analysis.
+    profiler traces, runs TraceLens analysis, and performs gap analysis.
 
     InferenceMAX is auto-cloned if not present.
 
@@ -1110,8 +1119,19 @@ def benchmark(
         input_len: Input sequence length (default: 1024)
         output_len: Output sequence length (default: 512)
         torch_profiler: Enable PyTorch profiler traces (default: True)
+        system_profiler: Enable system profiler - rocprof (AMD) or ncu (NVIDIA) (default: False)
         tracelens: Enable TraceLens trace analysis on host after benchmark (default: False)
         tracelens_export_format: TraceLens export format - "csv" or "excel" (default: "csv")
+        gap_analysis_enabled: Run gap analysis on torch traces after benchmark (default: False).
+            Requires torch_profiler=True.
+        gap_analysis_top_k: Number of top bottleneck kernels to report (default: 20)
+        gap_analysis_start_pct: Start of analysis window as % of trace (0-100, default: 0)
+        gap_analysis_end_pct: End of analysis window as % of trace (0-100, default: 100)
+        gap_analysis_min_duration_us: Minimum event duration filter in microseconds (default: 0)
+        gap_analysis_categories: Event categories to include (e.g., ["kernel", "gpu"]).
+            Default: ["kernel", "gpu"]
+        gap_analysis_ignore_categories: Event categories to exclude.
+            Default: ["gpu_user_annotation"]
         docker_image: Override automatic Docker image selection (optional)
         gpu_arch: Force GPU architecture, e.g. "gfx942" (auto-detected if omitted)
         inferencemax_path: Path to InferenceMAX installation (auto-cloned if empty)
@@ -1130,6 +1150,7 @@ def benchmark(
         - latency: TTFT, TPOT, ITL, E2EL (mean/median/p99/std in ms)
         - kernel_summary: top GPU kernels by time
         - top_bottlenecks: names of top 10 bottleneck kernels
+        - gap_analysis: kernel bottleneck analysis (if gap_analysis_enabled)
         - tracelens_analysis: TraceLens output files (if enabled)
         - workspace_dir: path to all output files
         - execution_time: total wall time in seconds
@@ -1150,13 +1171,23 @@ def benchmark(
 
         profiler_cfg = {
             "torch_profiler": {"enabled": torch_profiler},
-            "system_profiler": {"enabled": False},
+            "system_profiler": {"enabled": system_profiler},
             "tracelens": {
                 "enabled": tracelens,
                 "export_format": tracelens_export_format,
                 "perf_report_enabled": True,
                 "multi_rank_report_enabled": tp > 1,
             },
+        }
+
+        gap_analysis_cfg = {
+            "enabled": gap_analysis_enabled,
+            "top_k": gap_analysis_top_k,
+            "trace_start_pct": gap_analysis_start_pct,
+            "trace_end_pct": gap_analysis_end_pct,
+            "min_duration_us": gap_analysis_min_duration_us,
+            "categories": gap_analysis_categories or ["kernel", "gpu"],
+            "ignore_categories": gap_analysis_ignore_categories or ["gpu_user_annotation"],
         }
 
         config_dict = {
@@ -1166,6 +1197,7 @@ def benchmark(
             "run_mode": run_mode,
             "envs": envs,
             "profiler": profiler_cfg,
+            "gap_analysis": gap_analysis_cfg,
             "docker_image": docker_image,
             "gpu_arch": gpu_arch,
             "timeout_seconds": timeout_seconds,
@@ -1198,7 +1230,122 @@ def benchmark(
 
 
 # =============================================================================
-# Tool 9: list_benchmark_images
+# Tool 9: gap_analysis
+# =============================================================================
+@mcp.tool()
+def gap_analysis(
+    trace_dir: str,
+    start_pct: float = 0.0,
+    end_pct: float = 100.0,
+    top_k: int = 20,
+    min_duration_us: float = 0.0,
+    categories: Optional[List[str]] = None,
+    ignore_categories: Optional[List[str]] = None,
+    output_dir: Optional[str] = None,
+    generate_clamped_traces: bool = False,
+) -> str:
+    """
+    Run gap analysis on existing torch profiler traces to identify GPU kernel bottlenecks.
+
+    Parses Chrome-trace JSON files produced by PyTorch profiler, aggregates
+    kernel statistics across ranks, and identifies the top time-consuming
+    kernels. Works on traces from any source (Magpie benchmark, manual
+    profiling, etc.).
+
+    Args:
+        trace_dir: Path to the directory containing torch profiler trace files
+            (.json or .json.gz). If the path contains a torch_trace/ subdirectory,
+            it is used automatically.
+        start_pct: Start of the analysis time window as percentage of total
+            trace duration (0-100, default: 0)
+        end_pct: End of the analysis time window as percentage of total
+            trace duration (0-100, default: 100)
+        top_k: Number of top bottleneck kernels to report (default: 20)
+        min_duration_us: Filter out events shorter than this threshold
+            in microseconds (default: 0)
+        categories: Event categories to include using case-insensitive
+            substring matching (e.g., ["kernel", "gpu"]). None = all categories.
+        ignore_categories: Event categories to exclude (e.g.,
+            ["gpu_user_annotation"]). None = exclude nothing.
+        output_dir: Directory for output CSV files. Defaults to
+            gap_analysis/ next to the trace directory.
+        generate_clamped_traces: If True, also generate time-windowed
+            (clamped) trace files for visualization (default: False)
+
+    Returns:
+        JSON with gap analysis results:
+        - num_ranks: number of ranks analyzed
+        - total_duration_us: total GPU time in microseconds
+        - top_kernels: list of top-k kernels with name, calls,
+          self_cuda_total_us, avg_time_us, pct_total
+        - output_dir: path to CSV output files
+        - csv_file: path to the main gap_analysis.csv
+        - rank_csv_files: paths to per-rank CSV files (multi-rank only)
+        - clamped_trace_files: paths to clamped traces (if requested)
+        - errors: any warnings or errors during analysis
+    """
+    from ..modes.benchmark.gap_analysis import GapAnalyzer
+    from ..modes.benchmark.config import GapAnalysisConfig
+
+    try:
+        trace_path = Path(trace_dir).resolve()
+
+        if (trace_path / "torch_trace").is_dir():
+            trace_path = trace_path / "torch_trace"
+
+        if not trace_path.is_dir():
+            return json.dumps({"error": f"Trace directory not found: {trace_dir}"})
+
+        gap_config = GapAnalysisConfig(
+            enabled=True,
+            trace_start_pct=start_pct,
+            trace_end_pct=end_pct,
+            top_k=top_k,
+            min_duration_us=min_duration_us,
+            categories=categories,
+            ignore_categories=ignore_categories,
+        )
+
+        base_dir = Path(output_dir) if output_dir else trace_path.parent
+        gap_dir = base_dir / "gap_analysis"
+        gap_dir.mkdir(parents=True, exist_ok=True)
+
+        analyzer = GapAnalyzer(gap_config)
+        result = analyzer.analyze(trace_path)
+
+        response: Dict[str, Any] = {
+            "num_ranks": len(result.rank_results),
+            "total_duration_us": result.total_duration_us,
+            "top_kernels": result.to_dict().get("top_kernels", []),
+            "output_dir": str(gap_dir),
+            "errors": result.errors,
+        }
+
+        if result.merged_kernels:
+            csv_path = result.to_csv(gap_dir / "gap_analysis.csv")
+            response["csv_file"] = str(csv_path)
+
+            if len(result.rank_results) > 1:
+                rank_paths = result.to_rank_csv(gap_dir)
+                response["rank_csv_files"] = [str(p) for p in rank_paths]
+        else:
+            response["warning"] = "No kernel events found in traces"
+
+        if generate_clamped_traces:
+            clamped_paths = analyzer.generate_clamped_traces(
+                trace_path, output_dir=gap_dir,
+            )
+            response["clamped_trace_files"] = [str(p) for p in clamped_paths]
+
+        return json.dumps(response, indent=2)
+
+    except Exception as e:
+        logger.exception(f"Gap analysis failed: {e}")
+        return json.dumps({"error": str(e), "trace_dir": trace_dir})
+
+
+# =============================================================================
+# Tool 10: list_benchmark_images
 # =============================================================================
 @mcp.tool()
 def list_benchmark_images(
@@ -1245,7 +1392,7 @@ def list_benchmark_images(
 
 
 # =============================================================================
-# Tool 10: list_benchmark_results
+# Tool 11: list_benchmark_results
 # =============================================================================
 @mcp.tool()
 def list_benchmark_results(
@@ -1342,7 +1489,7 @@ def list_benchmark_results(
 
 
 # =============================================================================
-# Tool 11: get_benchmark_result
+# Tool 12: get_benchmark_result
 # =============================================================================
 @mcp.tool()
 def get_benchmark_result(
@@ -1451,7 +1598,7 @@ def get_benchmark_result(
 
 
 # =============================================================================
-# Tool 12: compare_benchmark_reports
+# Tool 13: compare_benchmark_reports
 # =============================================================================
 @mcp.tool()
 def compare_benchmark_reports(
