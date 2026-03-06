@@ -7,9 +7,11 @@
 Performance evaluation module.
 
 This module handles performance measurement of GPU kernels using
-different backends based on kernel type:
+different backends based on kernel type and GPU architecture:
 - HIP kernels: rocprof-compute (two-stage: profile + analyze)
 - CUDA kernels: ncu (NVIDIA Nsight Compute)
+- Triton kernels: auto-selected based on GPU arch (rocprof-compute on AMD,
+  ncu on NVIDIA) since Triton JIT-compiles to native HIP/CUDA dispatches
 """
 
 from __future__ import annotations
@@ -168,9 +170,11 @@ class Performance:
     """
     Performance evaluation handler.
 
-    Uses different profiling backends based on kernel type:
+    Uses different profiling backends based on kernel type and GPU architecture:
     - HIP: rocprof-compute (two-stage workflow)
     - CUDA: ncu (NVIDIA Nsight Compute)
+    - Triton: same system profiler as native kernels on the detected GPU
+      (rocprof-compute on AMD gfx*, ncu on NVIDIA sm_*)
     """
 
     def __init__(self, pipeline_cfg: PipelineConfig) -> None:

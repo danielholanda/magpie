@@ -11,7 +11,7 @@ This module defines Task and TaskResult for unified task management.
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from ..config import KernelEvalConfig
@@ -56,7 +56,7 @@ class ModeConfig:
     mode_type: ModeType = ModeType.ANALYZE
     enable_default_compile: bool = False
     check_performance: bool = True
-    gpu_arch: str = None,
+    gpu_arch: Optional[str] = None
     timeout_seconds: float = 300.0
     profiler_args: List[str] = field(default_factory=list)
     rocprof_config: Dict[str, Any] = field(default_factory=dict)

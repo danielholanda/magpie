@@ -50,7 +50,7 @@ class AnalyzeConfig:
     """
 
     kernel_type: KernelType = KernelType.HIP
-    gpu_arch: str = None,
+    gpu_arch: Optional[str] = None
     enable_default_compile: bool = False
     check_performance: bool = True
     timeout_seconds: float = 300.0
@@ -123,6 +123,7 @@ class AnalyzeMode:
             performance_config=PerformanceConfig(
                 enabled=self.config.check_performance,
                 kernel_type=kernel_cfg.kernel_type,
+                gpu_arch=self.config.gpu_arch,
                 timeout_seconds=self.config.timeout_seconds,
                 profiler_args=self.config.profiler_args,
                 rocprof_config=rocprof_cfg,
