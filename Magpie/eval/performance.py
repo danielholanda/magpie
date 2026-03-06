@@ -7,9 +7,11 @@
 Performance evaluation module.
 
 This module handles performance measurement of GPU kernels using
-different backends based on kernel type:
+different backends based on kernel type and GPU architecture:
 - HIP kernels: rocprof-compute (two-stage: profile + analyze)
 - CUDA kernels: ncu (NVIDIA Nsight Compute)
+- Triton kernels: auto-selected based on GPU arch (rocprof-compute on AMD,
+  ncu on NVIDIA) since Triton JIT-compiles to native HIP/CUDA dispatches
 """
 
 from __future__ import annotations
@@ -168,9 +170,11 @@ class Performance:
     """
     Performance evaluation handler.
 
-    Uses different profiling backends based on kernel type:
+    Uses different profiling backends based on kernel type and GPU architecture:
     - HIP: rocprof-compute (two-stage workflow)
     - CUDA: ncu (NVIDIA Nsight Compute)
+    - Triton: same system profiler as native kernels on the detected GPU
+      (rocprof-compute on AMD gfx*, ncu on NVIDIA sm_*)
     """
 
     def __init__(self, pipeline_cfg: PipelineConfig) -> None:
@@ -192,8 +196,8 @@ class Performance:
         Logic:
         1. --no-perf (enabled=False) → Skip (return None)
         2. Has prof_command → Run custom profiler
-        3. No prof_command but has testcase_command → Use built-in profiler on testcase
-        4. No prof_command and no testcase_command → Skip (return None)
+        3. No prof_command and no testcase_command → Skip (return None)
+        4. Use built-in profiler (rocprof-compute / ncu) on testcase command.
 
         Args:
             eval_state: Current evaluation state
@@ -210,26 +214,25 @@ class Performance:
         if kernel_cfg.has_prof_command():
             return self._run_custom_profiler(kernel_cfg)
 
-        # 3. No prof_command - check if we have testcase_command for built-in profiler
-        if not kernel_cfg.has_testcase():
-            # 4. No testcase_command either, skip profiling
-            return None
-
-        # Use built-in profiler on testcase command
         backend = self.perf_cfg.get_backend()
 
+        # 3. No prof_command - check if we have testcase_command for built-in profiler
+        if not kernel_cfg.has_testcase():
+            return None
+
+        # 4. Use built-in profiler on testcase command
         try:
             if backend == PerfBackend.ROCPROF_COMPUTE:
                 return self._run_rocprof_compute_on_testcase(kernel_cfg)
             elif backend == PerfBackend.NCU:
                 return self._run_ncu_on_testcase(kernel_cfg)
             else:
-                # No profiling backend configured, skip
                 return None
 
         except Exception as e:
             logger.error(f"Performance evaluation failed: {e}")
             return PerformanceResult(success=False, errors=str(e))
+
 
     def _run_custom_profiler(self, kernel_cfg: KernelEvalConfig) -> PerformanceResult:
         """

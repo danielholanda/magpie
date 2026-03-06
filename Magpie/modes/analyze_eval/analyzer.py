@@ -50,13 +50,26 @@ class AnalyzeConfig:
     """
 
     kernel_type: KernelType = KernelType.HIP
-    gpu_arch: str = None,
+    gpu_arch: Optional[str] = None
     enable_default_compile: bool = False
     check_performance: bool = True
     timeout_seconds: float = 300.0
     profiler_args: List[str] = field(default_factory=list)
     rocprof_config: Dict[str, Any] = field(default_factory=dict)
     ncu_config: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        if self.gpu_arch is None:
+            self._detect_gpu_arch()
+
+    def _detect_gpu_arch(self) -> None:
+        try:
+            from ...utils import detect_gpu
+            _, arch = detect_gpu()
+            if arch:
+                self.gpu_arch = arch
+        except Exception:
+            pass
 
 
 class AnalyzeMode:
@@ -123,6 +136,7 @@ class AnalyzeMode:
             performance_config=PerformanceConfig(
                 enabled=self.config.check_performance,
                 kernel_type=kernel_cfg.kernel_type,
+                gpu_arch=self.config.gpu_arch,
                 timeout_seconds=self.config.timeout_seconds,
                 profiler_args=self.config.profiler_args,
                 rocprof_config=rocprof_cfg,

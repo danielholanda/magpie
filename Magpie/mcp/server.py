@@ -109,6 +109,38 @@ def _get_scheduler_config_from_yaml(environment: str = "local") -> "SchedulerCon
     )
 
 
+def _get_perf_settings_from_yaml() -> Dict[str, Any]:
+    """Read performance profiler settings from framework config.yaml.
+
+    Returns dict with timeout_seconds, profiler_args, rocprof_config, ncu_config.
+    Both rocprof and ncu configs are always populated so that cross-platform
+    kernels (Triton) get the correct settings regardless of which GPU is used.
+    """
+    config = _load_framework_config()
+    perf_cfg = config.get("performance", {})
+
+    rocprof_cfg = perf_cfg.get("rocprof_compute", {})
+    ncu_cfg = perf_cfg.get("ncu", {})
+
+    return {
+        "timeout_seconds": perf_cfg.get("timeout_seconds", 300.0),
+        "profiler_args": ncu_cfg.get("args", []),
+        "rocprof_config": {
+            "workload_dir": rocprof_cfg.get("workload_dir", "./workloads"),
+            "metric_blocks": rocprof_cfg.get(
+                "metric_blocks", ["1", "2", "5", "10", "11", "12", "14", "16", "17"]
+            ),
+            "output_format": rocprof_cfg.get("output_format", "csv"),
+            "profile_args": rocprof_cfg.get("profile_args", []),
+            "analyze_args": rocprof_cfg.get("analyze_args", []),
+        },
+        "ncu_config": {
+            "args": ncu_cfg.get("args", []),
+            "metrics": ncu_cfg.get("metrics", []),
+        },
+    }
+
+
 # =============================================================================
 # Tool 1: hardware_spec
 # =============================================================================
@@ -165,7 +197,7 @@ def analyze(
     Args:
         kernel_path: Path to kernel source file (.hip, .cu, .py)
         testcase_command: Command to run the test case
-        kernel_type: "hip", "cuda", or "pytorch"
+        kernel_type: "hip", "cuda", "pytorch", or "triton"
         working_dir: Working directory (default: kernel's parent dir)
         compile_command: Custom compile command (optional)
         check_performance: Run performance profiling (default: True)
@@ -192,6 +224,7 @@ def analyze(
             "cuda": KernelType.CUDA,
             "pytorch": KernelType.PYTORCH,
             "torch": KernelType.PYTORCH,
+            "triton": KernelType.TRITON,
         }
         ktype = type_map.get(kernel_type.lower(), KernelType.HIP)
 
@@ -224,10 +257,14 @@ def analyze(
             kernel_config_dict["compile_command"] = compile_command
 
         try:
-            # Run analysis via scheduler
+            perf_settings = _get_perf_settings_from_yaml()
             task_result = scheduler.run_analyze(
                 kernel_configs=[kernel_config],
                 check_performance=check_performance,
+                timeout_seconds=perf_settings["timeout_seconds"],
+                profiler_args=perf_settings["profiler_args"],
+                rocprof_config=perf_settings["rocprof_config"],
+                ncu_config=perf_settings["ncu_config"],
             )
 
             if task_result.success and task_result.results:
@@ -452,7 +489,7 @@ def compare(
     Args:
         kernel_paths: List of kernel source file paths (minimum 2)
         testcase_commands: List of test commands for each kernel (REQUIRED, must match kernel_paths length)
-        kernel_type: "hip", "cuda", or "pytorch"
+        kernel_type: "hip", "cuda", "pytorch", or "triton"
         baseline_index: Index of baseline kernel for comparison (default: 0)
         check_performance: Run performance profiling (default: True)
         environment: Execution environment "local" or "container"
@@ -483,6 +520,7 @@ def compare(
             "hip": KernelType.HIP,
             "cuda": KernelType.CUDA,
             "pytorch": KernelType.PYTORCH,
+            "triton": KernelType.TRITON,
         }
         ktype = type_map.get(kernel_type.lower(), KernelType.HIP)
 
@@ -521,11 +559,15 @@ def compare(
             })
 
         try:
-            # Run comparison via scheduler
+            perf_settings = _get_perf_settings_from_yaml()
             task_result = scheduler.run_compare(
                 kernel_configs=kernel_configs,
                 baseline_index=baseline_index,
                 check_performance=check_performance,
+                timeout_seconds=perf_settings["timeout_seconds"],
+                profiler_args=perf_settings["profiler_args"],
+                rocprof_config=perf_settings["rocprof_config"],
+                ncu_config=perf_settings["ncu_config"],
             )
 
             if task_result.success and task_result.results:
@@ -678,7 +720,7 @@ def discover_kernels(
 
     Args:
         project_path: Root path of the project to scan
-        kernel_type: Type of kernels to find: "hip", "cuda", or "all"
+        kernel_type: Type of kernels to find: "hip", "cuda", "triton", or "all"
         include_tests: Include test directories in search
         include_examples: Include example directories in search
 
@@ -699,6 +741,8 @@ def discover_kernels(
             extensions.update({".hip", ".cpp"})
         if kernel_type in ("cuda", "all"):
             extensions.update({".cu", ".cuh"})
+        if kernel_type in ("triton", "all"):
+            extensions.update({".py"})
 
         # Find source files using os.walk (faster, can skip directories)
         discovered = []
@@ -732,7 +776,7 @@ def discover_kernels(
                 # Generate suggested config (defer binary search for performance)
                 suggested_config = {
                     "kernel_path": str(source_file),
-                    "kernel_type": "hip" if ext in (".hip", ".cpp") else "cuda",
+                    "kernel_type": "hip" if ext in (".hip", ".cpp") else ("triton" if ext == ".py" else "cuda"),
                     "working_dir": str(project / "build")
                     if (project / "build").exists()
                     else str(project),
@@ -1003,7 +1047,7 @@ def create_kernel_config(
         kernel_id: Unique identifier for the kernel
         kernel_path: Path to the kernel source file
         testcase_command: Command to run the test case
-        kernel_type: "hip", "cuda", or "pytorch"
+        kernel_type: "hip", "cuda", "pytorch", or "triton"
         working_dir: Working directory for execution
         compile_command: Custom compile command (optional)
         output_path: DEPRECATED - file saving is disabled for safety

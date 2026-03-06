@@ -73,8 +73,8 @@ class Compiling:
         try:
             kernel_type = kernel_cfg.kernel_type
 
-            # PyTorch kernels never need compilation
-            if kernel_type == KernelType.PYTORCH:
+            # PyTorch and Triton kernels never need ahead-of-time compilation
+            if kernel_type in (KernelType.PYTORCH, KernelType.TRITON):
                 return None
 
             # If custom compile command is provided, use it
