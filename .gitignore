@@ -102,6 +102,7 @@ ncu_*/
 # Log files
 *.log
 logs/
+workloads/
 
 # Temporary files
 tmp/

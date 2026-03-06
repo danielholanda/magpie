@@ -52,6 +52,19 @@ class CompareConfig:
     baseline_index: int = 0
     gpu_arch: Optional[str] = None
     enable_default_compile: bool = False
+
+    def __post_init__(self):
+        if self.gpu_arch is None:
+            self._detect_gpu_arch()
+
+    def _detect_gpu_arch(self) -> None:
+        try:
+            from ...utils import detect_gpu
+            _, arch = detect_gpu()
+            if arch:
+                self.gpu_arch = arch
+        except Exception:
+            pass
     check_performance: bool = True
     timeout_seconds: float = 300.0
     profiler_args: List[str] = field(default_factory=list)
