@@ -109,6 +109,38 @@ def _get_scheduler_config_from_yaml(environment: str = "local") -> "SchedulerCon
     )
 
 
+def _get_perf_settings_from_yaml() -> Dict[str, Any]:
+    """Read performance profiler settings from framework config.yaml.
+
+    Returns dict with timeout_seconds, profiler_args, rocprof_config, ncu_config.
+    Both rocprof and ncu configs are always populated so that cross-platform
+    kernels (Triton) get the correct settings regardless of which GPU is used.
+    """
+    config = _load_framework_config()
+    perf_cfg = config.get("performance", {})
+
+    rocprof_cfg = perf_cfg.get("rocprof_compute", {})
+    ncu_cfg = perf_cfg.get("ncu", {})
+
+    return {
+        "timeout_seconds": perf_cfg.get("timeout_seconds", 300.0),
+        "profiler_args": ncu_cfg.get("args", []),
+        "rocprof_config": {
+            "workload_dir": rocprof_cfg.get("workload_dir", "./workloads"),
+            "metric_blocks": rocprof_cfg.get(
+                "metric_blocks", ["1", "2", "5", "10", "11", "12", "14", "16", "17"]
+            ),
+            "output_format": rocprof_cfg.get("output_format", "csv"),
+            "profile_args": rocprof_cfg.get("profile_args", []),
+            "analyze_args": rocprof_cfg.get("analyze_args", []),
+        },
+        "ncu_config": {
+            "args": ncu_cfg.get("args", []),
+            "metrics": ncu_cfg.get("metrics", []),
+        },
+    }
+
+
 # =============================================================================
 # Tool 1: hardware_spec
 # =============================================================================
@@ -225,10 +257,14 @@ def analyze(
             kernel_config_dict["compile_command"] = compile_command
 
         try:
-            # Run analysis via scheduler
+            perf_settings = _get_perf_settings_from_yaml()
             task_result = scheduler.run_analyze(
                 kernel_configs=[kernel_config],
                 check_performance=check_performance,
+                timeout_seconds=perf_settings["timeout_seconds"],
+                profiler_args=perf_settings["profiler_args"],
+                rocprof_config=perf_settings["rocprof_config"],
+                ncu_config=perf_settings["ncu_config"],
             )
 
             if task_result.success and task_result.results:
@@ -523,11 +559,15 @@ def compare(
             })
 
         try:
-            # Run comparison via scheduler
+            perf_settings = _get_perf_settings_from_yaml()
             task_result = scheduler.run_compare(
                 kernel_configs=kernel_configs,
                 baseline_index=baseline_index,
                 check_performance=check_performance,
+                timeout_seconds=perf_settings["timeout_seconds"],
+                profiler_args=perf_settings["profiler_args"],
+                rocprof_config=perf_settings["rocprof_config"],
+                ncu_config=perf_settings["ncu_config"],
             )
 
             if task_result.success and task_result.results:
