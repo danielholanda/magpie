@@ -526,9 +526,30 @@ class BenchmarkMode:
 
         return result, stdout, stderr
 
+    def _find_script_in_benchmarks(self, benchmarks_dir: Path, script_name: str) -> Optional[Path]:
+        """
+        Search for a script by filename inside benchmarks/ and its subdirectories.
+        
+        Checks the top-level directory first, then searches subdirectories.
+        Returns the first match or None.
+        """
+        # Top-level first
+        top_level = benchmarks_dir / script_name
+        if top_level.exists():
+            return top_level
+        
+        # Recursive search in subdirectories
+        for match in benchmarks_dir.rglob(script_name):
+            if match.is_file():
+                return match
+        
+        return None
+    
     def _get_benchmark_script(self, runner_type: str) -> str:
         """
         Get InferenceMAX benchmark script path with 3-tier priority.
+        
+        Searches benchmarks/ and its subdirectories (e.g. single_node/, multi_node/).
         
         Priority:
             1. User-specified script (benchmark_script config) - must exist
@@ -541,23 +562,26 @@ class BenchmarkMode:
             runner_type: Runner type (e.g., "mi300x", "h100", "b200")
         
         Returns:
-            Relative path to benchmark script
+            Relative path to benchmark script (from InferenceMAX root)
             
         Raises:
             FileNotFoundError: If no suitable script found
         """
         benchmarks_dir = Path(self.config.inferencemax_path) / "benchmarks"
+        inferencemax_root = Path(self.config.inferencemax_path)
         
         # Priority 1: User-specified script (must exist)
         if self.config.benchmark_script:
-            script_path = benchmarks_dir / self.config.benchmark_script
-            if not script_path.exists():
+            found = self._find_script_in_benchmarks(benchmarks_dir, self.config.benchmark_script)
+            if not found:
                 raise FileNotFoundError(
-                    f"Specified benchmark_script not found: {script_path}\n"
+                    f"Specified benchmark_script not found: {self.config.benchmark_script}\n"
+                    f"Searched in: {benchmarks_dir} (including subdirectories)\n"
                     f"Please ensure the file exists or remove the benchmark_script config."
                 )
-            logger.info(f"Using user-specified script: {self.config.benchmark_script}")
-            return f"benchmarks/{self.config.benchmark_script}"
+            rel_path = found.relative_to(inferencemax_root)
+            logger.info(f"Using user-specified script: {rel_path}")
+            return str(rel_path)
         
         # Priority 2: InferenceMAX native scripts
         # Mapping: sglang -> dsr1_, vllm -> gptoss_
@@ -566,11 +590,13 @@ class BenchmarkMode:
         
         if prefix:
             native_script = f"{prefix}_{self.config.precision}_{runner_type}.sh"
-            if (benchmarks_dir / native_script).exists():
-                logger.info(f"Using InferenceMAX native script: {native_script}")
-                return f"benchmarks/{native_script}"
+            found = self._find_script_in_benchmarks(benchmarks_dir, native_script)
+            if found:
+                rel_path = found.relative_to(inferencemax_root)
+                logger.info(f"Using InferenceMAX native script: {rel_path}")
+                return str(rel_path)
         
-        # Priority 3: Magpie generic scripts
+        # Priority 3: Magpie generic scripts (top-level only)
         generic_script = f"{self.config.framework}_{runner_type}.sh"
         if (benchmarks_dir / generic_script).exists():
             logger.info(f"Using Magpie generic script: {generic_script}")
@@ -580,6 +606,7 @@ class BenchmarkMode:
         raise FileNotFoundError(
             f"No benchmark script found for framework={self.config.framework}, "
             f"precision={self.config.precision}, gpu={runner_type}.\n"
+            f"Searched in: {benchmarks_dir} (including subdirectories)\n"
             f"Expected one of:\n"
             f"  - {prefix}_{self.config.precision}_{runner_type}.sh (InferenceMAX native)\n"
             f"  - {generic_script} (Magpie generic)\n"
