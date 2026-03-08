@@ -44,6 +44,15 @@ export VLLM_ROCM_USE_AITER_MHA=0
 SERVER_LOG=${SERVER_LOG:-/workspace/server.log}
 PORT=${PORT:-8888}
 
+# Build profiler args for vLLM >= 0.15 (env var VLLM_TORCH_PROFILER_DIR is deprecated)
+PROFILER_ARGS=()
+if [[ "${PROFILE:-}" == "1" ]]; then
+  TRACE_DIR="${VLLM_TORCH_PROFILER_DIR:-/workspace/torch_trace}"
+  mkdir -p "$TRACE_DIR"
+  PROFILER_ARGS+=(--profiler-config.profiler torch)
+  PROFILER_ARGS+=(--profiler-config.torch_profiler_dir "$TRACE_DIR")
+fi
+
 set -x
 vllm serve $MODEL --port $PORT \
   --tensor-parallel-size=$TP \
@@ -51,6 +60,7 @@ vllm serve $MODEL --port $PORT \
   --max-model-len $MAX_MODEL_LEN \
   --trust-remote-code \
   --disable-log-requests \
+  "${PROFILER_ARGS[@]}" \
   $EXTRA_VLLM_ARGS > $SERVER_LOG 2>&1 &
 
 SERVER_PID=$!
