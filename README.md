@@ -108,6 +108,12 @@ Available tools:
 - `discover_kernels` - Scan a project and suggest analyzable kernels/configs
 - `suggest_optimizations` - Suggest performance optimizations from analyze output
 - `create_kernel_config` - Generate a kernel config YAML for analyze
+- `benchmark` - Run vLLM/SGLang framework benchmark with optional profiling
+- `gap_analysis` - Run gap analysis on existing torch profiler traces
+- `list_benchmark_images` - List available Docker images per framework/arch
+- `list_benchmark_results` - List previous benchmark workspaces and summaries
+- `get_benchmark_result` - Read detailed results from a specific benchmark run
+- `compare_benchmark_reports` - Compare TraceLens reports across benchmark runs
 
 ## Development
 

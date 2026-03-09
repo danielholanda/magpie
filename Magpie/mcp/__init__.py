@@ -21,6 +21,7 @@ Kernel Tools:
 
 Benchmark Tools:
 - benchmark: Run vLLM/SGLang framework benchmark in Docker
+- gap_analysis: Run standalone gap analysis on existing torch profiler traces
 - list_benchmark_images: List available Docker images per framework/arch
 - list_benchmark_results: List previous benchmark workspaces and summaries
 - get_benchmark_result: Read detailed results from a specific benchmark run
