@@ -51,6 +51,10 @@ if [[ "${PROFILE:-}" == "1" ]]; then
   mkdir -p "$TRACE_DIR"
   PROFILER_ARGS+=(--profiler-config.profiler torch)
   PROFILER_ARGS+=(--profiler-config.torch_profiler_dir "$TRACE_DIR")
+  PROFILER_ARGS+=(--profiler-config.torch_profiler_record_shapes True)
+  PROFILER_ARGS+=(--profiler-config.torch_profiler_with_memory True)
+  PROFILER_ARGS+=(--profiler-config.torch_profiler_with_flops True)
+  PROFILER_ARGS+=(--profiler-config.torch_profiler_use_gzip True)
 fi
 
 set -x
