@@ -91,7 +91,7 @@ compiling:
 # =============================================================================
 performance:
   # Timeout for profiling operations (seconds)
-  timeout_seconds: 300
+  timeout_seconds: 600
   
   # rocprof-compute settings (AMD GPU)
   # Two-stage profiler: profile (collect data) + analyze (generate metrics)
