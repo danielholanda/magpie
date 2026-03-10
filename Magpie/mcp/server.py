@@ -113,15 +113,18 @@ def _get_scheduler_config_from_yaml(environment: str = "local") -> "SchedulerCon
 def _get_perf_settings_from_yaml() -> Dict[str, Any]:
     """Read performance profiler settings from framework config.yaml.
 
-    Returns dict with timeout_seconds, profiler_args, rocprof_config, ncu_config.
+    Returns dict with timeout_seconds, profiler_args, rocprof_config,
+    ncu_config, and metrix_config.
     Both rocprof and ncu configs are always populated so that cross-platform
     kernels (Triton) get the correct settings regardless of which GPU is used.
     """
     config = _load_framework_config()
     perf_cfg = config.get("performance", {})
 
+    backend_str = perf_cfg.get("backend")
     rocprof_cfg = perf_cfg.get("rocprof_compute", {})
     ncu_cfg = perf_cfg.get("ncu", {})
+    mtx_cfg = perf_cfg.get("metrix", {})
 
     return {
         "timeout_seconds": perf_cfg.get("timeout_seconds", 300.0),
@@ -138,6 +141,15 @@ def _get_perf_settings_from_yaml() -> Dict[str, Any]:
         "ncu_config": {
             "args": ncu_cfg.get("args", []),
             "metrics": ncu_cfg.get("metrics", []),
+        },
+        "metrix_config": {
+            "profile": mtx_cfg.get("profile"),
+            "metrics": mtx_cfg.get("metrics", []),
+            "kernel_filter": mtx_cfg.get("kernel_filter"),
+            "num_replays": mtx_cfg.get("num_replays", 1),
+            "timeout_seconds": mtx_cfg.get("timeout_seconds", 60),
+            "extra_args": mtx_cfg.get("extra_args", []),
+            "backend": backend_str,
         },
     }
 
@@ -191,6 +203,7 @@ def analyze(
     compile_command: str = "",
     check_performance: bool = True,
     environment: str = "local",
+    performance_backend: str = "",
 ) -> str:
     """
     Analyze a GPU kernel for correctness and performance.
@@ -203,6 +216,7 @@ def analyze(
         compile_command: Custom compile command (optional)
         check_performance: Run performance profiling (default: True)
         environment: Execution environment "local" or "container"
+        performance_backend: Profiling backend override: "metrix", "rocprof_compute", or "ncu" (default: auto)
 
     Returns:
         JSON with comprehensive analysis results including:
@@ -259,6 +273,14 @@ def analyze(
 
         try:
             perf_settings = _get_perf_settings_from_yaml()
+
+            # Apply per-call backend override
+            if performance_backend:
+                from ..main import _apply_perf_overrides
+                perf_settings = _apply_perf_overrides(
+                    perf_settings, {"backend": performance_backend}, ktype
+                )
+
             task_result = scheduler.run_analyze(
                 kernel_configs=[kernel_config],
                 check_performance=check_performance,
@@ -266,12 +288,12 @@ def analyze(
                 profiler_args=perf_settings["profiler_args"],
                 rocprof_config=perf_settings["rocprof_config"],
                 ncu_config=perf_settings["ncu_config"],
+                metrix_config=perf_settings["metrix_config"],
             )
 
             if task_result.success and task_result.results:
                 result = task_result.results[0]
                 formatted = _format_analysis_result(result, kernel_config, ktype)
-                # Add kernel config to output
                 formatted["kernel_config"] = kernel_config_dict
                 return json.dumps(formatted, indent=2)
             else:
@@ -480,6 +502,7 @@ def compare(
     baseline_index: int = 0,
     check_performance: bool = True,
     environment: str = "local",
+    performance_backend: str = "",
 ) -> str:
     """
     Compare multiple GPU kernels for performance and correctness.
@@ -494,6 +517,7 @@ def compare(
         baseline_index: Index of baseline kernel for comparison (default: 0)
         check_performance: Run performance profiling (default: True)
         environment: Execution environment "local" or "container"
+        performance_backend: Profiling backend override: "metrix", "rocprof_compute", or "ncu" (default: auto)
 
     Returns:
         JSON with comparison results, ranking, and summary
@@ -561,6 +585,14 @@ def compare(
 
         try:
             perf_settings = _get_perf_settings_from_yaml()
+
+            # Apply per-call backend override
+            if performance_backend:
+                from ..main import _apply_perf_overrides
+                perf_settings = _apply_perf_overrides(
+                    perf_settings, {"backend": performance_backend}, ktype
+                )
+
             task_result = scheduler.run_compare(
                 kernel_configs=kernel_configs,
                 baseline_index=baseline_index,
@@ -569,6 +601,7 @@ def compare(
                 profiler_args=perf_settings["profiler_args"],
                 rocprof_config=perf_settings["rocprof_config"],
                 ncu_config=perf_settings["ncu_config"],
+                metrix_config=perf_settings["metrix_config"],
             )
 
             if task_result.success and task_result.results:

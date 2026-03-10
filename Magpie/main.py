@@ -69,12 +69,19 @@ def parse_kernel_type(type_str: str) -> KernelType:
     return type_map.get(type_str.lower(), KernelType.HIP)
 
 
-def load_kernel_config(kernel_config_path: Path) -> List[KernelEvalConfig]:
+def load_kernel_config(
+    kernel_config_path: Path,
+) -> tuple[List[KernelEvalConfig], Dict[str, Any]]:
     """
     Load kernel configuration from YAML file.
 
+    The YAML may optionally contain a ``performance:`` section that
+    overrides the framework-level performance settings (e.g. backend,
+    metrix config).
+
     Returns:
-        List of KernelEvalConfig objects
+        Tuple of (list of KernelEvalConfig, performance overrides dict).
+        The overrides dict is empty when no ``performance:`` section exists.
     """
     data = load_yaml(kernel_config_path)
     configs = []
@@ -92,7 +99,10 @@ def load_kernel_config(kernel_config_path: Path) -> List[KernelEvalConfig]:
             if cfg:
                 configs.append(cfg)
 
-    return configs
+    # Performance overrides (optional section in kernel config)
+    perf_overrides = data.get("performance", {})
+
+    return configs, perf_overrides
 
 
 def _parse_command_list(cmd_entry) -> Optional[List]:
@@ -221,17 +231,22 @@ def _get_performance_config(
         kernel_type: Kernel type to determine which profiler args to use
 
     Returns:
-        Dict with timeout_seconds, profiler_args, and rocprof_config/ncu_config
+        Dict with timeout_seconds, profiler_args, rocprof_config, ncu_config,
+        and metrix_config.
     """
     perf_cfg = config.get("performance", {})
 
     # Get timeout
     timeout = perf_cfg.get("timeout_seconds", 300.0)
 
+    # Explicit backend override (e.g. "metrix" for AMD GPUs)
+    backend_str = perf_cfg.get("backend")
+
     # Get profiler args and config based on kernel type
     profiler_args = []
     rocprof_config = {}
     ncu_config = {}
+    metrix_config = {}
 
     if kernel_type in (KernelType.HIP, KernelType.TRITON):
         rocprof_cfg = perf_cfg.get("rocprof_compute", {})
@@ -243,6 +258,18 @@ def _get_performance_config(
             "output_format": rocprof_cfg.get("output_format", "csv"),
             "profile_args": rocprof_cfg.get("profile_args", []),
             "analyze_args": rocprof_cfg.get("analyze_args", []),
+        }
+
+        # Metrix config (available for HIP/Triton on AMD)
+        mtx_cfg = perf_cfg.get("metrix", {})
+        metrix_config = {
+            "profile": mtx_cfg.get("profile"),
+            "metrics": mtx_cfg.get("metrics", []),
+            "kernel_filter": mtx_cfg.get("kernel_filter"),
+            "num_replays": mtx_cfg.get("num_replays", 1),
+            "timeout_seconds": mtx_cfg.get("timeout_seconds", 60),
+            "extra_args": mtx_cfg.get("extra_args", []),
+            "backend": backend_str,
         }
 
     if kernel_type in (KernelType.CUDA, KernelType.TRITON):
@@ -258,7 +285,64 @@ def _get_performance_config(
         "profiler_args": profiler_args,
         "rocprof_config": rocprof_config,
         "ncu_config": ncu_config,
+        "metrix_config": metrix_config,
     }
+
+
+def _apply_perf_overrides(
+    perf_settings: Dict[str, Any],
+    overrides: Dict[str, Any],
+    kernel_type: "KernelType",
+) -> Dict[str, Any]:
+    """Merge kernel-config-level ``performance:`` overrides into *perf_settings*.
+
+    Supported override keys (all optional):
+      - ``backend``: ``"metrix"`` | ``"rocprof_compute"`` | ``"ncu"``
+      - ``timeout_seconds``: int
+      - ``metrix``: dict of Metrix-specific settings
+      - ``rocprof_compute`` / ``ncu``: dict of backend-specific settings
+    """
+    settings = dict(perf_settings)
+
+    backend_str = overrides.get("backend")
+
+    if "timeout_seconds" in overrides:
+        settings["timeout_seconds"] = int(overrides["timeout_seconds"])
+
+    # Metrix overrides
+    if "metrix" in overrides or backend_str == "metrix":
+        mtx = overrides.get("metrix", {})
+        settings["metrix_config"] = {
+            "profile": mtx.get("profile"),
+            "metrics": mtx.get("metrics", []),
+            "kernel_filter": mtx.get("kernel_filter"),
+            "num_replays": mtx.get("num_replays", 1),
+            "timeout_seconds": mtx.get(
+                "timeout_seconds", settings.get("timeout_seconds", 600)
+            ),
+            "backend": backend_str or "metrix",
+        }
+
+    # rocprof_compute overrides
+    if "rocprof_compute" in overrides:
+        rpc = overrides["rocprof_compute"]
+        existing = settings.get("rocprof_config", {})
+        existing.update(rpc)
+        settings["rocprof_config"] = existing
+
+    # ncu overrides
+    if "ncu" in overrides:
+        ncu = overrides["ncu"]
+        existing = settings.get("ncu_config", {})
+        existing.update(ncu)
+        settings["ncu_config"] = existing
+
+    # Propagate explicit backend into metrix_config even if only backend was set
+    if backend_str and backend_str != "metrix":
+        settings.setdefault("metrix_config", {})
+        settings["metrix_config"]["backend"] = None
+
+    return settings
 
 
 def _get_compare_config(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -314,10 +398,11 @@ def run_analyze(args, config: Dict[str, Any]) -> int:
     """Run analyze mode."""
     # Load kernel configs
     kernel_configs = []
+    perf_overrides: Dict[str, Any] = {}
 
     if args.kernel_config:
         # Load from kernel config file
-        kernel_configs = load_kernel_config(args.kernel_config)
+        kernel_configs, perf_overrides = load_kernel_config(args.kernel_config)
         if not kernel_configs:
             logger.error(f"No kernels found in {args.kernel_config}")
             return 1
@@ -358,6 +443,10 @@ def run_analyze(args, config: Dict[str, Any]) -> int:
     compile_settings = _get_compiling_config(config)
     perf_settings = _get_performance_config(config, kernel_type)
 
+    # Apply per-config performance overrides (from kernel config YAML)
+    if perf_overrides:
+        perf_settings = _apply_perf_overrides(perf_settings, perf_overrides, kernel_type)
+
     # Create scheduler
     scheduler_config = _get_scheduler_config(config, args)
     scheduler = Scheduler(scheduler_config)
@@ -376,17 +465,31 @@ def run_analyze(args, config: Dict[str, Any]) -> int:
             profiler_args=perf_settings["profiler_args"],
             rocprof_config=perf_settings["rocprof_config"],
             ncu_config=perf_settings["ncu_config"],
+            metrix_config=perf_settings["metrix_config"],
         )
 
         # Print and save results
         if result.success and result.results:
+            # Create workspace directory
+            label = kernel_configs[0].kernel_id if kernel_configs else ""
+            ws_path = _create_workspace(args.output_dir, "analyze", label)
+            _save_config_snapshot(ws_path, kernel_configs)
+
+            summary_lines = []
             for kernel_cfg, state in zip(kernel_configs, result.results):
-                # Reconstruct EvaluationState if needed
                 if isinstance(state, dict):
                     state = _dict_to_eval_state(state)
                 _print_result(kernel_cfg, state)
+                summary_lines.append(
+                    f"Kernel: {kernel_cfg.kernel_id}  "
+                    f"Correctness: {state.correctness_state.name}  "
+                    f"Performance: {state.performance_state.name}  "
+                    f"Score: {state.score:.2f}"
+                )
 
-            _save_results(result.results, args.output_dir, "analyze")
+            _save_results(result.results, ws_path, "analyze")
+            _save_summary(ws_path, "\n".join(summary_lines))
+            print(f"\nWorkspace: {ws_path}")
         else:
             logger.error(f"Analysis failed: {result.errors}")
             return 1
@@ -412,9 +515,10 @@ def run_compare(args, config: Dict[str, Any]) -> int:
     """Run compare mode."""
     # Load kernel configs
     kernel_configs = []
+    perf_overrides: Dict[str, Any] = {}
 
     if args.kernel_config:
-        kernel_configs = load_kernel_config(args.kernel_config)
+        kernel_configs, perf_overrides = load_kernel_config(args.kernel_config)
     elif args.kernels:
         kernel_type = parse_kernel_type(args.type)
 
@@ -445,6 +549,10 @@ def run_compare(args, config: Dict[str, Any]) -> int:
     perf_settings = _get_performance_config(config, kernel_type)
     compare_settings = _get_compare_config(config)
 
+    # Apply per-config performance overrides (from kernel config YAML)
+    if perf_overrides:
+        perf_settings = _apply_perf_overrides(perf_settings, perf_overrides, kernel_type)
+
     # Create scheduler
     scheduler_config = _get_scheduler_config(config, args)
     scheduler = Scheduler(scheduler_config)
@@ -464,6 +572,7 @@ def run_compare(args, config: Dict[str, Any]) -> int:
             profiler_args=perf_settings["profiler_args"],
             rocprof_config=perf_settings["rocprof_config"],
             ncu_config=perf_settings["ncu_config"],
+            metrix_config=perf_settings["metrix_config"],
             compare_config=compare_settings,
         )
 
@@ -471,19 +580,35 @@ def run_compare(args, config: Dict[str, Any]) -> int:
         if result.success and result.results:
             comparison = result.results
 
+            # Create workspace directory
+            ws_path = _create_workspace(args.output_dir, "compare")
+            _save_config_snapshot(ws_path, kernel_configs)
+
+            # Create per-kernel subdirectories
+            for i, cfg in enumerate(kernel_configs):
+                kid = cfg.kernel_id or f"kernel_{i}"
+                safe_kid = "".join(
+                    c if c.isalnum() or c in "-_" else "_" for c in kid
+                )
+                kernel_dir = ws_path / "kernels" / f"kernel_{i}_{safe_kid}"
+                (kernel_dir / "performance").mkdir(parents=True, exist_ok=True)
+
             print(f"\n{'=' * 60}")
             print("COMPARISON RESULTS")
             print(f"{'=' * 60}")
 
+            summary_text = ""
             if isinstance(comparison, dict):
-                print(comparison.get("summary", "No summary available"))
+                summary_text = comparison.get("summary", "No summary available")
             elif hasattr(comparison, "summary"):
-                print(comparison.summary)
+                summary_text = comparison.summary
+            print(summary_text)
 
             print(f"{'=' * 60}\n")
 
-            # Save results
-            _save_comparison(comparison, args.output_dir)
+            _save_comparison(comparison, ws_path)
+            _save_summary(ws_path, summary_text)
+            print(f"Workspace: {ws_path}")
         else:
             logger.error(f"Comparison failed: {result.errors}")
             return 1
@@ -540,14 +665,59 @@ def _print_result(kernel_cfg: KernelEvalConfig, result: EvaluationState) -> None
     print(f"{'=' * 60}")
 
 
-def _save_results(results: List, output_dir: Path, mode: str) -> None:
-    """Save results to file."""
+def _create_workspace(
+    base_dir: Path, mode: str, label: str = ""
+) -> Path:
+    """Create a timestamped workspace directory for analyze/compare results.
+
+    Structure:
+        <base_dir>/<mode>_<label>_<timestamp>/
+            performance/
+            config.yaml  (written later)
+    """
+    from datetime import datetime
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_label = "".join(c if c.isalnum() or c in "-_" else "_" for c in label) if label else ""
+    parts = [mode, safe_label, timestamp] if safe_label else [mode, timestamp]
+    ws_name = "_".join(parts)
+
+    ws_path = (base_dir / ws_name).resolve()
+    ws_path.mkdir(parents=True, exist_ok=True)
+    (ws_path / "performance").mkdir(exist_ok=True)
+
+    logger.info(f"Created {mode} workspace: {ws_path}")
+    return ws_path
+
+
+def _save_config_snapshot(
+    ws_path: Path, kernel_configs: List, extra: Optional[Dict[str, Any]] = None
+) -> None:
+    """Save a YAML config snapshot into the workspace."""
+    snapshot: Dict[str, Any] = {"kernels": []}
+    for cfg in kernel_configs:
+        if hasattr(cfg, "to_dict"):
+            snapshot["kernels"].append(cfg.to_dict())
+        else:
+            snapshot["kernels"].append(str(cfg))
+    if extra:
+        snapshot.update(extra)
+
+    config_file = ws_path / "config.yaml"
+    try:
+        with open(config_file, "w") as f:
+            yaml.dump(snapshot, f, default_flow_style=False)
+    except Exception as e:
+        logger.warning(f"Failed to save config snapshot: {e}")
+
+
+def _save_results(results: List, ws_path: Path, mode: str) -> None:
+    """Save analysis/compare results into the workspace as a JSON report."""
     import json
     from datetime import datetime
 
-    output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_file = output_dir / f"{mode}_results_{timestamp}.json"
+    report_file = ws_path / f"{mode}_report.json"
 
     serialized_results: List[Any] = []
     for r in results:
@@ -558,26 +728,34 @@ def _save_results(results: List, output_dir: Path, mode: str) -> None:
         else:
             serialized_results.append(str(r))
 
-    with open(output_file, "w") as f:
+    with open(report_file, "w") as f:
         json.dump(
             {"mode": mode, "timestamp": timestamp, "results": serialized_results},
             f,
             indent=2,
         )
 
-    logger.info(f"Results saved to {output_file}")
+    logger.info(f"Results saved to {report_file}")
 
 
-def _save_comparison(comparison: Any, output_dir: Path) -> None:
-    """Save comparison to file."""
+def _save_summary(ws_path: Path, text: str) -> None:
+    """Write a human-readable summary into the workspace."""
+    summary_file = ws_path / "summary.txt"
+    try:
+        with open(summary_file, "w") as f:
+            f.write(text)
+    except Exception as e:
+        logger.warning(f"Failed to write summary: {e}")
+
+
+def _save_comparison(comparison: Any, ws_path: Path) -> None:
+    """Save comparison results into the workspace as a JSON report."""
     import json
     from datetime import datetime
 
-    output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_file = output_dir / f"compare_results_{timestamp}.json"
+    report_file = ws_path / "compare_report.json"
 
-    # Extract comparison data
     if isinstance(comparison, dict):
         comparison_data = comparison
     elif hasattr(comparison, "to_dict"):
@@ -585,8 +763,7 @@ def _save_comparison(comparison: Any, output_dir: Path) -> None:
     else:
         comparison_data = {"result": str(comparison)}
 
-    # Use same format as analyze: mode, timestamp, results
-    with open(output_file, "w") as f:
+    with open(report_file, "w") as f:
         json.dump(
             {
                 "mode": "compare",
@@ -603,7 +780,7 @@ def _save_comparison(comparison: Any, output_dir: Path) -> None:
             indent=2,
         )
 
-    logger.info(f"Comparison saved to {output_file}")
+    logger.info(f"Comparison saved to {report_file}")
 
 
 def load_benchmark_config(benchmark_config_path: Path) -> Dict[str, Any]:

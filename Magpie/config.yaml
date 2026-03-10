@@ -92,7 +92,11 @@ compiling:
 performance:
   # Timeout for profiling operations (seconds)
   timeout_seconds: 600
-  
+
+  # Backend selection for AMD GPUs: "rocprof_compute" (default) or "metrix"
+  # When unset, auto-selects based on kernel type (HIP -> rocprof_compute)
+  # backend: rocprof_compute
+
   # rocprof-compute settings (AMD GPU)
   # Two-stage profiler: profile (collect data) + analyze (generate metrics)
   rocprof_compute:
@@ -124,6 +128,16 @@ performance:
     args: ["--target-processes", "all"]
     metrics: []
 
+  # IntelliKit Metrix settings (AMD GPU)
+  # Human-readable GPU metrics via rocprofv3
+  # Activate by setting: backend: metrix
+  metrix:
+    profile: null              # Preset: "quick", "memory", "compute", or null for all
+    metrics: []                # Specific metrics, e.g. ["memory.l2_hit_rate"]
+    kernel_filter: null        # Regex to filter kernel names
+    num_replays: 1             # Number of profiling runs for statistics
+    timeout_seconds: 60        # Timeout per profiling run
+
 
 compare:
   # Per-backend weights (rocprof-compute for AMD, ncu for NVIDIA)
@@ -148,6 +162,13 @@ compare:
     lts__throughput.avg.pct_of_peak_sustained_elapsed: 0.10
     dram__throughput.avg.pct_of_peak_sustained_elapsed: 0.20
     duration_ns_total: 0.20
+  perf_weights_metrix:
+    memory.hbm_bandwidth_utilization: 0.20
+    memory.l2_hit_rate: 0.15
+    memory.l1_hit_rate: 0.10
+    memory.coalescing_efficiency: 0.10
+    compute.hbm_arithmetic_intensity: 0.15
+    duration_ns_total: 0.30
 
 benchmark:
   # Path to separate image mapping configuration file

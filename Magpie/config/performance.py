@@ -24,6 +24,7 @@ class PerfBackend(Enum):
 
     ROCPROF_COMPUTE = auto()  # rocprof-compute for HIP/AMD GPUs
     NCU = auto()  # NVIDIA Nsight Compute for CUDA
+    METRIX = auto()  # IntelliKit Metrix for HIP/AMD GPUs (uses rocprofv3)
     NONE = auto()  # No profiling
 
 
@@ -78,6 +79,83 @@ ROCPROF_KEY_METRICS = {
     "SALU": "Inst_SALU",
     "SMEM": "Inst_SMEM",
 }
+
+
+METRIX_KEY_METRICS = {
+    "memory.hbm_read_bandwidth": "HBM_Read_BW",
+    "memory.hbm_write_bandwidth": "HBM_Write_BW",
+    "memory.hbm_bandwidth_utilization": "HBM_BW_Util",
+    "memory.bytes_transferred_hbm": "HBM_Bytes",
+    "memory.bytes_transferred_l2": "L2_Bytes",
+    "memory.bytes_transferred_l1": "L1_Bytes",
+    "memory.l1_hit_rate": "L1_HitRate",
+    "memory.l2_hit_rate": "L2_HitRate",
+    "memory.l2_bandwidth": "L2_BW",
+    "memory.coalescing_efficiency": "Coalescing_Eff",
+    "memory.global_load_efficiency": "Global_Load_Eff",
+    "memory.global_store_efficiency": "Global_Store_Eff",
+    "memory.lds_bank_conflicts": "LDS_Conflicts",
+    "memory.atomic_latency": "Atomic_Latency",
+    "compute.total_flops": "Total_FLOPs",
+    "compute.hbm_gflops": "HBM_GFLOPS",
+    "compute.hbm_arithmetic_intensity": "HBM_Arith_Intensity",
+    "compute.l2_arithmetic_intensity": "L2_Arith_Intensity",
+    "compute.l1_arithmetic_intensity": "L1_Arith_Intensity",
+}
+
+
+@dataclass
+class MetrixConfig:
+    """
+    Configuration for IntelliKit Metrix profiler.
+
+    Metrix wraps rocprofv3 and provides human-readable GPU metrics.
+    CLI: ``metrix profile [options] -- <command>``
+
+    Attributes:
+        profile: Preset profile name ("quick", "memory", "compute") or None
+        metrics: Specific metric names to collect, e.g. ["memory.l2_hit_rate"]
+        kernel_filter: Regex to filter kernels by name
+        num_replays: Number of profiling runs for min/max/avg statistics
+        timeout_seconds: Timeout per profiling run in seconds
+        extra_args: Additional CLI arguments passed to ``metrix profile``
+    """
+
+    profile: Optional[str] = None
+    metrics: List[str] = field(default_factory=list)
+    kernel_filter: Optional[str] = None
+    num_replays: int = 1
+    timeout_seconds: int = 60
+    extra_args: List[str] = field(default_factory=list)
+
+    def get_profile_args(self, output_path: str) -> List[str]:
+        """Build ``metrix profile`` command arguments.
+
+        Args:
+            output_path: Path for the JSON output file.
+
+        Returns:
+            List of CLI arguments (without the leading ``metrix profile``).
+        """
+        args: List[str] = []
+
+        args.extend(["--output", output_path])
+        args.extend(["--num-replays", str(self.num_replays)])
+        args.extend(["--timeout", str(self.timeout_seconds)])
+        args.append("--aggregate")
+
+        if self.profile:
+            args.extend(["--profile", self.profile])
+
+        if self.metrics:
+            args.extend(["--metrics", ",".join(self.metrics)])
+
+        if self.kernel_filter:
+            args.extend(["--kernel", self.kernel_filter])
+
+        args.extend(self.extra_args)
+
+        return args
 
 
 @dataclass
@@ -241,6 +319,7 @@ class PerformanceConfig:
     profiler_args: List[str] = field(default_factory=list)  # Legacy
     rocprof_config: Optional[RocprofComputeConfig] = None
     ncu_config: Optional[NcuConfig] = None
+    metrix_config: Optional[MetrixConfig] = None
 
     def __post_init__(self):
         # Auto-select backend based on kernel type if not specified
@@ -261,6 +340,8 @@ class PerformanceConfig:
             self.rocprof_config = RocprofComputeConfig()
         if self.ncu_config is None:
             self.ncu_config = NcuConfig()
+        if self.metrix_config is None:
+            self.metrix_config = MetrixConfig()
 
     def _backend_for_gpu_arch(self) -> PerfBackend:
         """Select profiling backend based on detected GPU architecture.

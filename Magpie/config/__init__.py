@@ -29,7 +29,9 @@ from .performance import (
     PerformanceConfig,
     RocprofComputeConfig,
     NcuConfig,
+    MetrixConfig,
     ROCPROF_KEY_METRICS,
+    METRIX_KEY_METRICS,
     DEFAULT_ROCPROF_METRIC_BLOCKS,
 )
 
@@ -50,6 +52,8 @@ __all__ = [
     "PerformanceConfig",
     "RocprofComputeConfig",
     "NcuConfig",
+    "MetrixConfig",
     "ROCPROF_KEY_METRICS",
+    "METRIX_KEY_METRICS",
     "DEFAULT_ROCPROF_METRIC_BLOCKS",
 ]
