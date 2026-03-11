@@ -132,11 +132,11 @@ performance:
   # Human-readable GPU metrics via rocprofv3
   # Activate by setting: backend: metrix
   metrix:
-    profile: null              # Preset: "quick", "memory", "compute", or null for all
+    profile: null               # Preset: "quick", "memory", "compute", or null for all
     metrics: []                # Specific metrics, e.g. ["memory.l2_hit_rate"]
-    kernel_filter: null        # Regex to filter kernel names
+    kernel_filter: null         # Regex to filter kernel names
     num_replays: 1             # Number of profiling runs for statistics
-    timeout_seconds: 60        # Timeout per profiling run
+    timeout_seconds: 600       # Timeout per profiling run
 
 
 compare:
