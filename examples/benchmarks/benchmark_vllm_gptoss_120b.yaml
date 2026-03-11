@@ -2,17 +2,18 @@
 # ====================================================================
 #
 # Usage (Docker - default):
-#   python -m Magpie benchmark --benchmark-config examples/benchmark_vllm_gptoss_120b.yaml
+#   python -m Magpie benchmark --benchmark-config examples/benchmarks/benchmark_vllm_gptoss_120b.yaml
 #
 # Usage (Local - run directly on host, e.g. inside a pod):
-#   python -m Magpie benchmark --benchmark-config examples/benchmark_vllm_gptoss_120b.yaml --run-mode local
+#   python -m Magpie benchmark --benchmark-config examples/benchmarks/benchmark_vllm_gptoss_120b.yaml --run-mode local
 #
-# Uses Magpie generic script vllm_mi355x.sh (compatible with vLLM v0.15.1)
+# Uses Magpie generic script vllm_mi355x.sh
 
 benchmark:
   framework: vllm
   model: openai/gpt-oss-120b
   precision: fp4
+  run_mode: docker
 
   envs:
     TP: 8
@@ -40,8 +41,8 @@ benchmark:
     tracelens:
       enabled: false
 
-  docker_image: "vllm/vllm-openai-rocm:v0.15.1"
-  benchmark_script: "vllm_mi355x.sh"
+  # docker_image: "vllm/vllm-openai-rocm:v0.15.1"
+  # benchmark_script: "vllm_mi355x.sh"
 
   gap_analysis:
     enabled: true

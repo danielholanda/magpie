@@ -1,8 +1,10 @@
 # Test: Using InferenceMAX Native Script
 # ========================================
 # This config tests the benchmark_script lookup priority:
-#   Priority 1: User-specified script (this test)
-#
+#   Priority 1: User-specified script in InferenceMAX/benchmarks/
+#   Priority 2: InferenceMAX native scripts: {prefix}_{precision}_{runner}.sh
+#   Priority 3: Magpie generic scripts: {framework}_{runner}.sh
+
 # Usage:
 #   python -m Magpie benchmark --benchmark-config examples/test_inferencemax_script.yaml
 #
@@ -12,6 +14,7 @@ benchmark:
   framework: sglang
   model: deepseek-ai/DeepSeek-R1-0528
   precision: fp8
+  # run_mode: docker (default) or local
   
   # Environment variables
   envs:
@@ -28,9 +31,11 @@ benchmark:
       enabled: false
     system_profiler:
       enabled: false
+    tracelens:
+      enabled: false
       
   # InferenceMAX path (empty string will auto clone)
-  inferencemax_path: ""
+  # inferencemax_path: ""
   
   # TEST: Specify InferenceMAX native script directly
   benchmark_script: "dsr1_fp8_mi300x.sh"

@@ -3,7 +3,7 @@
 # This example shows how to benchmark vLLM with DeepSeek-R1 model.
 #
 # Usage:
-#   python -m Magpie benchmark --benchmark-config examples/benchmark_vllm.yaml
+#   python -m Magpie benchmark --benchmark-config examples/benchmarks/benchmark_vllm_dsr1.yaml
 #
 # Prerequisites:
 #   - Docker with GPU support
@@ -39,7 +39,7 @@ benchmark:
   # Will auto-clone InferenceMAX if not specified
   # inferencemax_path: ""
   
-  # Auto-detect: will use Magpie generic script (vllm_mi300x.sh)
+  # Auto-detect: will use Magpie generic script
   
   # Timeout (DeepSeek-R1 needs time to load)
   timeout_seconds: 3600

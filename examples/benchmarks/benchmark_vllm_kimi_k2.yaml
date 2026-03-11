@@ -1,9 +1,20 @@
+# vLLM Benchmark Configuration for amd/Kimi-K2-Thinking-MXFP4
+# ============================================================
+#
+# Usage (Docker - default):
+#   python -m Magpie benchmark --benchmark-config examples/benchmarks/benchmark_vllm_kimi_k2.yaml
+#
+# Usage (Local - run directly on host, e.g. inside a pod):
+#   python -m Magpie benchmark --benchmark-config examples/benchmarks/benchmark_vllm_kimi_k2.yaml --run-mode local
+#
+# Uses Magpie generic script vllm_mi355x.sh
+
 benchmark:
   framework: vllm
   model: amd/Kimi-K2-Thinking-MXFP4
   precision: mxfp4
 
-  envs:                             # environment variables
+  envs:
     TP: 4
     CONC: 4
     ISL: 8192
@@ -23,7 +34,7 @@ benchmark:
   docker_image: "rocm/vllm-private:mlperf_0.14_vllm"
   timeout_seconds: 3600
 
-  gap_analysis:                      # gap analysis configuration(only support vllm)
+  gap_analysis:
     enabled: true
     trace_start_pct: 50
     trace_end_pct: 80

@@ -3,7 +3,7 @@
 # Configuration for vLLM benchmarking with TraceLens trace analysis.
 #
 # Usage:
-#   python -m Magpie benchmark --benchmark-config examples/benchmark_vllm_tracelens.yaml
+#   python -m Magpie benchmark --benchmark-config examples/benchmarks/benchmark_vllm_tracelens.yaml
 #
 # Output:
 #   - Torch profiler traces: results/benchmark_vllm_<timestamp>/torch_trace/

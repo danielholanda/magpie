@@ -3,7 +3,7 @@
 # This example shows how to benchmark SGLang with DeepSeek-R1 model.
 #
 # Usage:
-#   python -m Magpie benchmark --benchmark-config examples/benchmark_sglang.yaml
+#   python -m Magpie benchmark --benchmark-config examples/benchmarks/benchmark_sglang_dsr1.yaml
 #
 # Prerequisites:
 #   - Docker with GPU support

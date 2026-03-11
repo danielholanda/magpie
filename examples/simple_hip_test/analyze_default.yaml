@@ -1,0 +1,8 @@
+# Simple vector_add - default backend (rocprof_compute)
+kernel:
+  id: "vector_add"
+  type: hip
+  source_files:
+    - "./vector_add.hip"
+  testcase_command: "./vector_add"
+  working_dir: "/shared_nfs/haoli/Magpie/examples/simple_hip_test"
