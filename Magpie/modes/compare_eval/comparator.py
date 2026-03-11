@@ -155,6 +155,7 @@ class CompareMode:
             rocprof_cfg = None
             if self.config.rocprof_config:
                 rocprof_cfg = RocprofComputeConfig(
+                    output_dir=self.config.rocprof_config.get("output_dir"),
                     workload_dir=self.config.rocprof_config.get(
                         "workload_dir", "./workloads"
                     ),
@@ -182,6 +183,7 @@ class CompareMode:
             explicit_backend = None
             if self.config.metrix_config:
                 metrix_cfg = MetrixConfig(
+                    output_dir=self.config.metrix_config.get("output_dir"),
                     profile=self.config.metrix_config.get("profile"),
                     metrics=self.config.metrix_config.get("metrics", []),
                     kernel_filter=self.config.metrix_config.get("kernel_filter"),

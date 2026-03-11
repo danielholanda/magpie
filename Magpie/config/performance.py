@@ -121,6 +121,7 @@ class MetrixConfig:
         extra_args: Additional CLI arguments passed to ``metrix profile``
     """
 
+    output_dir: Optional[str] = None
     profile: Optional[str] = None
     metrics: List[str] = field(default_factory=list)
     kernel_filter: Optional[str] = None
@@ -181,6 +182,7 @@ class RocprofComputeConfig:
         target_gpu: Target GPU architecture (e.g., "gfx942", auto-detected if None)
     """
 
+    output_dir: Optional[str] = None
     workload_dir: str = "./workloads"
     profile_args: List[str] = field(default_factory=list)
     analyze_args: List[str] = field(default_factory=list)
@@ -253,9 +255,10 @@ class RocprofComputeConfig:
         if self.metric_blocks:
             args.extend(["-b"] + self.metric_blocks)
 
-        # Save dataframes to CSV if output format is csv
         if output_dir and self.output_format == "csv":
-            args.extend(["--save-dfs", output_dir])
+            args.extend(["--output-format", "csv", "--output-name", output_dir])
+        elif self.output_format == "csv":
+            args.extend(["--output-format", "csv"])
 
         # Add custom analyze args (split to support single-string entries)
         args.extend(self._expand_args(self.analyze_args))

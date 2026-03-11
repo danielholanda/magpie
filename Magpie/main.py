@@ -447,6 +447,15 @@ def run_analyze(args, config: Dict[str, Any]) -> int:
     if perf_overrides:
         perf_settings = _apply_perf_overrides(perf_settings, perf_overrides, kernel_type)
 
+    # Create workspace before profiling so profiler writes directly there
+    label = kernel_configs[0].kernel_id if kernel_configs else ""
+    ws_path = _create_workspace(args.output_dir, "analyze", label)
+    _save_config_snapshot(ws_path, kernel_configs)
+
+    perf_dir = str(ws_path / "performance")
+    perf_settings["rocprof_config"]["output_dir"] = perf_dir
+    perf_settings["metrix_config"]["output_dir"] = perf_dir
+
     # Create scheduler
     scheduler_config = _get_scheduler_config(config, args)
     scheduler = Scheduler(scheduler_config)
@@ -470,25 +479,12 @@ def run_analyze(args, config: Dict[str, Any]) -> int:
 
         # Print and save results
         if result.success and result.results:
-            # Create workspace directory
-            label = kernel_configs[0].kernel_id if kernel_configs else ""
-            ws_path = _create_workspace(args.output_dir, "analyze", label)
-            _save_config_snapshot(ws_path, kernel_configs)
-
-            summary_lines = []
             for kernel_cfg, state in zip(kernel_configs, result.results):
                 if isinstance(state, dict):
                     state = _dict_to_eval_state(state)
                 _print_result(kernel_cfg, state)
-                summary_lines.append(
-                    f"Kernel: {kernel_cfg.kernel_id}  "
-                    f"Correctness: {state.correctness_state.name}  "
-                    f"Performance: {state.performance_state.name}  "
-                    f"Score: {state.score:.2f}"
-                )
 
             _save_results(result.results, ws_path, "analyze")
-            _save_summary(ws_path, "\n".join(summary_lines))
             print(f"\nWorkspace: {ws_path}")
         else:
             logger.error(f"Analysis failed: {result.errors}")
@@ -553,6 +549,14 @@ def run_compare(args, config: Dict[str, Any]) -> int:
     if perf_overrides:
         perf_settings = _apply_perf_overrides(perf_settings, perf_overrides, kernel_type)
 
+    # Create workspace before profiling so profiler writes directly there
+    ws_path = _create_workspace(args.output_dir, "compare")
+    _save_config_snapshot(ws_path, kernel_configs)
+
+    perf_dir = str(ws_path / "performance")
+    perf_settings["rocprof_config"]["output_dir"] = perf_dir
+    perf_settings["metrix_config"]["output_dir"] = perf_dir
+
     # Create scheduler
     scheduler_config = _get_scheduler_config(config, args)
     scheduler = Scheduler(scheduler_config)
@@ -580,19 +584,6 @@ def run_compare(args, config: Dict[str, Any]) -> int:
         if result.success and result.results:
             comparison = result.results
 
-            # Create workspace directory
-            ws_path = _create_workspace(args.output_dir, "compare")
-            _save_config_snapshot(ws_path, kernel_configs)
-
-            # Create per-kernel subdirectories
-            for i, cfg in enumerate(kernel_configs):
-                kid = cfg.kernel_id or f"kernel_{i}"
-                safe_kid = "".join(
-                    c if c.isalnum() or c in "-_" else "_" for c in kid
-                )
-                kernel_dir = ws_path / "kernels" / f"kernel_{i}_{safe_kid}"
-                (kernel_dir / "performance").mkdir(parents=True, exist_ok=True)
-
             print(f"\n{'=' * 60}")
             print("COMPARISON RESULTS")
             print(f"{'=' * 60}")
@@ -607,7 +598,6 @@ def run_compare(args, config: Dict[str, Any]) -> int:
             print(f"{'=' * 60}\n")
 
             _save_comparison(comparison, ws_path)
-            _save_summary(ws_path, summary_text)
             print(f"Workspace: {ws_path}")
         else:
             logger.error(f"Comparison failed: {result.errors}")
@@ -736,16 +726,6 @@ def _save_results(results: List, ws_path: Path, mode: str) -> None:
         )
 
     logger.info(f"Results saved to {report_file}")
-
-
-def _save_summary(ws_path: Path, text: str) -> None:
-    """Write a human-readable summary into the workspace."""
-    summary_file = ws_path / "summary.txt"
-    try:
-        with open(summary_file, "w") as f:
-            f.write(text)
-    except Exception as e:
-        logger.warning(f"Failed to write summary: {e}")
 
 
 def _save_comparison(comparison: Any, ws_path: Path) -> None:
