@@ -109,6 +109,8 @@ Available tools:
 - `suggest_optimizations` - Suggest performance optimizations from analyze output
 - `create_kernel_config` - Generate a kernel config YAML for analyze
 
+For environments without MCP, use the Magpie skill; see [docs/skills-install.md](docs/skills-install.md).
+
 ## Development
 
 ```bash
