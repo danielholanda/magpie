@@ -115,6 +115,8 @@ Available tools:
 - `get_benchmark_result` - Read detailed results from a specific benchmark run
 - `compare_benchmark_reports` - Compare TraceLens reports across benchmark runs
 
+For environments without MCP, use the Magpie skill; see [docs/skills-install.md](docs/skills-install.md).
+
 ## Development
 
 ```bash

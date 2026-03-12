@@ -121,3 +121,5 @@ kernel_config.yaml
 .LSOverride
 .directory
 
+.claude/*
+.cursor/*
