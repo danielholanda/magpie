@@ -13,7 +13,7 @@ mcp>=1.0.0
 # py-spy>=0.3.14
 # memory-profiler>=0.61.0
 
-# Optional: ROCm/HIP profiling integration
+# Optional: ROCm/HIP profiling integration >= 3.40
 # see https://rocm.docs.amd.com/projects/rocprofiler-compute/en/latest/install/core-install.html
 
 # Optional: CUDA profiling integration

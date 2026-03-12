@@ -27,7 +27,7 @@ from ...config import (
     CorrectnessMode,
     PerformanceConfig,
 )
-from ...config.performance import RocprofComputeConfig, NcuConfig
+from ...config.performance import RocprofComputeConfig, NcuConfig, MetrixConfig, PerfBackend
 from ...eval import Evaluator, EvaluationState, BaseKind
 
 logger = logging.getLogger(__name__)
@@ -70,11 +70,13 @@ class CompareConfig:
     profiler_args: List[str] = field(default_factory=list)
     rocprof_config: Dict[str, Any] = field(default_factory=dict)
     ncu_config: Dict[str, Any] = field(default_factory=dict)
+    metrix_config: Dict[str, Any] = field(default_factory=dict)
     # Winner selection strategy: "correctness_first" or "perf_score"
     winner_strategy: str = "perf_score"
     # Per-backend scoring weights
     perf_weights_rocprof: Dict[str, float] = field(default_factory=dict)
     perf_weights_ncu: Dict[str, float] = field(default_factory=dict)
+    perf_weights_metrix: Dict[str, float] = field(default_factory=dict)
     # Metrics where lower values are better (e.g., duration)
     perf_lower_is_better: List[str] = field(
         default_factory=lambda: ["duration_ns_total", "LDS_Conflicts"]
@@ -153,6 +155,7 @@ class CompareMode:
             rocprof_cfg = None
             if self.config.rocprof_config:
                 rocprof_cfg = RocprofComputeConfig(
+                    output_dir=self.config.rocprof_config.get("output_dir"),
                     workload_dir=self.config.rocprof_config.get(
                         "workload_dir", "./workloads"
                     ),
@@ -175,6 +178,22 @@ class CompareMode:
                     metrics=self.config.ncu_config.get("metrics", []),
                 )
 
+            # Build metrix config if provided
+            metrix_cfg = None
+            explicit_backend = None
+            if self.config.metrix_config:
+                metrix_cfg = MetrixConfig(
+                    output_dir=self.config.metrix_config.get("output_dir"),
+                    profile=self.config.metrix_config.get("profile"),
+                    metrics=self.config.metrix_config.get("metrics", []),
+                    kernel_filter=self.config.metrix_config.get("kernel_filter"),
+                    num_replays=self.config.metrix_config.get("num_replays", 1),
+                    timeout_seconds=self.config.metrix_config.get("timeout_seconds", 60),
+                    extra_args=self.config.metrix_config.get("extra_args", []),
+                )
+                if self.config.metrix_config.get("backend") == "metrix":
+                    explicit_backend = PerfBackend.METRIX
+
             # Build pipeline config
             pipeline_cfg = PipelineConfig(
                 mode=EvalMode.COMPARE,
@@ -186,12 +205,14 @@ class CompareMode:
                 correctness_config=CorrectnessConfig(mode=corr_mode),
                 performance_config=PerformanceConfig(
                     enabled=self.config.check_performance,
+                    backend=explicit_backend,
                     kernel_type=cfg.kernel_type,
                     gpu_arch=self.config.gpu_arch,
                     timeout_seconds=self.config.timeout_seconds,
                     profiler_args=self.config.profiler_args,
                     rocprof_config=rocprof_cfg,
                     ncu_config=ncu_cfg,
+                    metrix_config=metrix_cfg,
                 ),
             )
 
@@ -248,6 +269,14 @@ class CompareMode:
 
     def _get_perf_weights(self, kernel_type: KernelType) -> Dict[str, float]:
         """Select per-backend weights, with sane fallbacks."""
+        # If metrix backend is explicitly selected, prefer metrix weights
+        is_metrix = (
+            self.config.metrix_config
+            and self.config.metrix_config.get("backend") == "metrix"
+        )
+        if is_metrix and self.config.perf_weights_metrix:
+            return self.config.perf_weights_metrix
+
         if kernel_type == KernelType.CUDA:
             if self.config.perf_weights_ncu:
                 return self.config.perf_weights_ncu

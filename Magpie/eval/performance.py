@@ -31,7 +31,7 @@ from ..config import (
     PerfBackend,
     PerformanceConfig,
 )
-from ..config.performance import ROCPROF_KEY_METRICS
+from ..config.performance import ROCPROF_KEY_METRICS, METRIX_KEY_METRICS
 from ..utils import get_updated_env
 
 if TYPE_CHECKING:
@@ -226,6 +226,8 @@ class Performance:
                 return self._run_rocprof_compute_on_testcase(kernel_cfg)
             elif backend == PerfBackend.NCU:
                 return self._run_ncu_on_testcase(kernel_cfg)
+            elif backend == PerfBackend.METRIX:
+                return self._run_metrix_on_testcase(kernel_cfg)
             else:
                 return None
 
@@ -329,21 +331,14 @@ class Performance:
         rocprof_cfg = self.perf_cfg.rocprof_config
         assert rocprof_cfg is not None
 
-        # Create workload directory
-        timestamp = int(time.time())
-        kernel_name = kernel_cfg.kernel_id or "kernel"
-        # Sanitize kernel name for directory
-        safe_kernel_name = "".join(
-            c if c.isalnum() or c in "-_" else "_" for c in kernel_name
-        )
-        workload_name = f"{safe_kernel_name}_{timestamp}"
-
-        # Use working directory as base for workload output
-        workload_base_dir = (
-            Path(working_dir or str(Path.cwd())) / rocprof_cfg.workload_dir
-        )
-        workload_base_dir.mkdir(parents=True, exist_ok=True)
-        workload_path = workload_base_dir / workload_name
+        workload_name = "rocprof_compute_output"
+        if rocprof_cfg.output_dir:
+            workload_dir = Path(rocprof_cfg.output_dir) / workload_name
+        else:
+            workload_dir = (
+                Path(working_dir or str(Path.cwd())) / rocprof_cfg.workload_dir / workload_name
+            )
+        workload_dir.mkdir(parents=True, exist_ok=True)
 
         all_outputs = []
         all_errors = []
@@ -351,10 +346,9 @@ class Performance:
         try:
             # ===== Stage 1: Profile =====
             for cmd_idx, testcase_cmd in enumerate(testcase_commands):
-                # Build rocprof-compute profile command
                 profile_args = rocprof_cfg.get_profile_args(
-                    workload_name=f"{workload_name}_run{cmd_idx}",
-                    output_dir=str(workload_base_dir),
+                    workload_name=workload_name,
+                    output_dir=str(workload_dir),
                 )
 
                 cmd = [
@@ -394,50 +388,22 @@ class Performance:
                         raw_output="\n".join(all_outputs),
                         errors=f"rocprof-compute profile failed on testcase {cmd_idx + 1}: {result.stderr or result.stdout}",
                         command=cmd_str,
-                        workload_dir=str(workload_path),
+                        workload_dir=str(workload_dir),
                     )
 
-            # Find the workload directory created by profile
-            # rocprof-compute creates a directory named like: workload_name/
-            actual_workload_dir = None
-            for d in workload_base_dir.iterdir():
-                if d.is_dir() and workload_name in d.name:
-                    actual_workload_dir = d
-                    break
-
-            if actual_workload_dir is None:
-                # Try to find any directory matching the pattern
-                for d in workload_base_dir.iterdir():
-                    if d.is_dir() and safe_kernel_name in d.name:
-                        actual_workload_dir = d
-                        break
-
-            if actual_workload_dir is None:
+            # v3.4.0 writes data directly to the -p path
+            if not (workload_dir / "pmc_perf.csv").exists():
                 return PerformanceResult(
                     success=False,
                     raw_output="\n".join(all_outputs),
-                    errors=f"Could not find workload directory in {workload_base_dir}",
-                    workload_dir=str(workload_base_dir),
+                    errors=f"No profiling data (pmc_perf.csv) found in {workload_dir}",
+                    workload_dir=str(workload_dir),
                 )
 
-            # rocprof-compute creates GPU-specific subdirectories (e.g., MI300X_A1/)
-            # Find the GPU subdirectory containing the profiling data
-            gpu_data_dir = None
-            for subdir in actual_workload_dir.iterdir():
-                if subdir.is_dir() and (subdir / "pmc_perf.csv").exists():
-                    gpu_data_dir = subdir
-                    break
-
-            # Use the GPU data directory for analysis if found, otherwise use workload dir
-            analyze_dir = gpu_data_dir if gpu_data_dir else actual_workload_dir
-
             # ===== Stage 2: Analyze =====
-            # Create output directory for CSV files
-            csv_output_dir = actual_workload_dir / "analysis"
-            csv_output_dir.mkdir(parents=True, exist_ok=True)
-
+            analysis_output_dir = workload_dir / "analysis"
             analyze_args = rocprof_cfg.get_analyze_args(
-                str(analyze_dir), output_dir=str(csv_output_dir)
+                str(workload_dir), output_dir="analysis"
             )
             analyze_cmd = [
                 "rocprof-compute",
@@ -454,7 +420,7 @@ class Performance:
                 capture_output=True,
                 text=True,
                 env=env,
-                cwd=working_dir,
+                cwd=str(workload_dir),
                 timeout=self.perf_cfg.timeout_seconds,
             )
 
@@ -468,13 +434,12 @@ class Performance:
                     raw_output="\n".join(all_outputs),
                     errors=f"rocprof-compute analyze failed: {analyze_result.stderr or analyze_result.stdout}",
                     command=analyze_cmd_str,
-                    workload_dir=str(actual_workload_dir),
+                    workload_dir=str(workload_dir),
                 )
 
             # ===== Parse Results =====
-            # Parse from both the GPU data directory (for raw metrics) and analysis output directory
             metrics, kernel_metrics = self._parse_rocprof_workload(
-                gpu_data_dir or actual_workload_dir, csv_output_dir
+                workload_dir, analysis_output_dir
             )
 
             return PerformanceResult(
@@ -484,25 +449,21 @@ class Performance:
                 else [MetricResult(name="profiling_complete", value=1.0, unit="bool")],
                 kernel_metrics=kernel_metrics,
                 raw_output="\n".join(all_outputs),
-                workload_dir=str(actual_workload_dir),
+                workload_dir=str(workload_dir),
             )
 
         except subprocess.TimeoutExpired:
             return PerformanceResult(
                 success=False,
                 errors=f"Profiling timed out after {self.perf_cfg.timeout_seconds}s",
-                workload_dir=str(workload_path)
-                if "workload_path" in locals()
-                else None,
+                workload_dir=str(workload_dir),
             )
         except Exception as e:
             logger.error(f"rocprof-compute failed: {e}", exc_info=True)
             return PerformanceResult(
                 success=False,
                 errors=str(e),
-                workload_dir=str(workload_path)
-                if "workload_path" in locals()
-                else None,
+                workload_dir=str(workload_dir),
             )
 
     def _parse_rocprof_workload(
@@ -953,3 +914,194 @@ class Performance:
             )
 
         return metrics
+
+    def _run_metrix_on_testcase(
+        self, kernel_cfg: KernelEvalConfig
+    ) -> PerformanceResult:
+        """
+        Run profiling using IntelliKit Metrix on the testcase command.
+
+        Metrix wraps rocprofv3 and produces human-readable GPU metrics.
+        CLI: ``metrix profile [options] -- <command>``
+        """
+        metrix_path = shutil.which("metrix")
+        if metrix_path is None:
+            return PerformanceResult(
+                success=False,
+                errors="metrix not found. Install IntelliKit Metrix "
+                "(pip install intellikit[metrix]).",
+            )
+
+        testcase_commands = kernel_cfg.get_testcase_commands()
+        if not testcase_commands:
+            return PerformanceResult(
+                success=False, errors="No testcase command available for profiling"
+            )
+
+        working_dir = kernel_cfg.working_dir
+        env = get_updated_env(kernel_cfg.env)
+        metrix_cfg = self.perf_cfg.metrix_config
+        assert metrix_cfg is not None
+
+        timestamp = int(time.time())
+        kernel_name = kernel_cfg.kernel_id or "kernel"
+        safe_name = "".join(
+            c if c.isalnum() or c in "-_" else "_" for c in kernel_name
+        )
+        if metrix_cfg.output_dir:
+            output_base = Path(metrix_cfg.output_dir) / "metrix_output"
+        else:
+            output_base = Path(working_dir or str(Path.cwd())) / "metrix_output"
+        output_base.mkdir(parents=True, exist_ok=True)
+        output_json = output_base / f"{safe_name}_{timestamp}.json"
+
+        all_outputs: List[str] = []
+        all_errors: List[str] = []
+
+        try:
+            for cmd_idx, testcase_cmd in enumerate(testcase_commands):
+                profile_args = metrix_cfg.get_profile_args(str(output_json))
+
+                cmd = [
+                    "metrix",
+                    "profile",
+                    *profile_args,
+                    "--",
+                    *testcase_cmd,
+                ]
+
+                cmd_str = " ".join(cmd)
+                logger.info(
+                    f"Running metrix on testcase {cmd_idx + 1}/"
+                    f"{len(testcase_commands)}"
+                )
+                logger.debug(f"Command: {cmd_str}")
+
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                    cwd=working_dir,
+                    timeout=self.perf_cfg.timeout_seconds,
+                )
+
+                all_outputs.append(result.stdout)
+                if result.stderr:
+                    all_errors.append(result.stderr)
+
+                if result.returncode != 0:
+                    return PerformanceResult(
+                        success=False,
+                        raw_output="\n".join(all_outputs),
+                        errors=(
+                            f"metrix profile failed on testcase {cmd_idx + 1}: "
+                            f"{result.stderr or result.stdout}"
+                        ),
+                        command=cmd_str,
+                    )
+
+            # Parse JSON output
+            if not output_json.exists():
+                return PerformanceResult(
+                    success=True,
+                    metrics=[
+                        MetricResult(
+                            name="profiling_complete", value=1.0, unit="bool"
+                        )
+                    ],
+                    raw_output="\n".join(all_outputs),
+                )
+
+            metrics, kernel_metrics = self._parse_metrix_json_output(output_json)
+
+            return PerformanceResult(
+                success=True,
+                metrics=metrics
+                if metrics
+                else [
+                    MetricResult(
+                        name="profiling_complete", value=1.0, unit="bool"
+                    )
+                ],
+                kernel_metrics=kernel_metrics,
+                raw_output="\n".join(all_outputs),
+                workload_dir=str(output_base),
+            )
+
+        except subprocess.TimeoutExpired:
+            return PerformanceResult(
+                success=False,
+                errors=f"Profiling timed out after {self.perf_cfg.timeout_seconds}s",
+            )
+        except Exception as e:
+            logger.error(f"metrix failed: {e}", exc_info=True)
+            return PerformanceResult(success=False, errors=str(e))
+
+    def _parse_metrix_json_output(
+        self, json_path: Path
+    ) -> tuple[List[MetricResult], List[KernelMetrics]]:
+        """Parse Metrix JSON output into Magpie metric structures.
+
+        Metrix JSON format (per dispatch/kernel)::
+
+            {
+              "<dispatch_key>": {
+                "duration_us": {"min": ..., "max": ..., "avg": ...},
+                "metrics": {
+                  "memory.l2_hit_rate": {"min": ..., "max": ..., "avg": ..., "count": ...},
+                  ...
+                }
+              }
+            }
+        """
+        import json as _json
+
+        metrics: List[MetricResult] = []
+        kernel_metrics: List[KernelMetrics] = []
+
+        try:
+            with open(json_path, "r") as f:
+                data = _json.load(f)
+        except Exception as e:
+            logger.warning(f"Failed to read metrix JSON output {json_path}: {e}")
+            return metrics, kernel_metrics
+
+        # Accumulate metrics across all dispatches for summary
+        metric_accum: Dict[str, List[float]] = {}
+
+        for dispatch_idx, (dispatch_key, dispatch_data) in enumerate(data.items()):
+            # Build KernelMetrics
+            kernel_name = dispatch_key
+            duration_ns: Optional[float] = None
+            dur_data = dispatch_data.get("duration_us")
+            if dur_data and dur_data.get("avg") is not None:
+                duration_ns = dur_data["avg"] * 1000.0  # us -> ns
+
+            km = KernelMetrics(
+                kernel_name=kernel_name,
+                dispatch_id=dispatch_idx,
+                duration_ns=duration_ns,
+                metrics=[],
+            )
+
+            for metric_name, stats in dispatch_data.get("metrics", {}).items():
+                avg_val = stats.get("avg")
+                if avg_val is None:
+                    continue
+                km.metrics.append(
+                    MetricResult(name=metric_name, value=avg_val, unit="")
+                )
+                metric_accum.setdefault(metric_name, []).append(avg_val)
+
+            kernel_metrics.append(km)
+
+        # Build summary metrics (average across all dispatches)
+        for metric_name, values in metric_accum.items():
+            avg = sum(values) / len(values) if values else 0.0
+            display_name = METRIX_KEY_METRICS.get(metric_name, metric_name)
+            metrics.append(
+                MetricResult(name=display_name, value=avg, unit="")
+            )
+
+        return metrics, kernel_metrics

@@ -150,6 +150,7 @@ class Scheduler:
         profiler_args: Optional[List[str]] = None,
         rocprof_config: Optional[Dict[str, Any]] = None,
         ncu_config: Optional[Dict[str, Any]] = None,
+        metrix_config: Optional[Dict[str, Any]] = None,
         baseline_index: int = 0,
         compare_config: Optional[Dict[str, Any]] = None,
         benchmark_config: Optional[Dict[str, Any]] = None,
@@ -185,6 +186,7 @@ class Scheduler:
             profiler_args=profiler_args or [],
             rocprof_config=rocprof_config or {},
             ncu_config=ncu_config or {},
+            metrix_config=metrix_config or {},
             baseline_index=baseline_index,
             compare_config=compare_config or {},
             benchmark_config=benchmark_config or {},
@@ -270,6 +272,7 @@ class Scheduler:
         profiler_args: Optional[List[str]] = None,
         rocprof_config: Optional[Dict[str, Any]] = None,
         ncu_config: Optional[Dict[str, Any]] = None,
+        metrix_config: Optional[Dict[str, Any]] = None,
     ) -> TaskResult:
         """
         Convenience method to run analyze mode.
@@ -283,6 +286,7 @@ class Scheduler:
             profiler_args: Additional arguments for the profiler (legacy)
             rocprof_config: rocprof-compute configuration dict
             ncu_config: ncu configuration dict
+            metrix_config: Metrix configuration dict
 
         Returns:
             TaskResult with analysis results
@@ -297,6 +301,7 @@ class Scheduler:
             profiler_args=profiler_args,
             rocprof_config=rocprof_config,
             ncu_config=ncu_config,
+            metrix_config=metrix_config,
         )
         return self.execute(task)
 
@@ -311,6 +316,7 @@ class Scheduler:
         profiler_args: Optional[List[str]] = None,
         rocprof_config: Optional[Dict[str, Any]] = None,
         ncu_config: Optional[Dict[str, Any]] = None,
+        metrix_config: Optional[Dict[str, Any]] = None,
         compare_config: Optional[Dict[str, Any]] = None,
     ) -> TaskResult:
         """
@@ -326,6 +332,7 @@ class Scheduler:
             profiler_args: Additional arguments for the profiler (legacy)
             rocprof_config: rocprof-compute configuration dict
             ncu_config: ncu configuration dict
+            metrix_config: Metrix configuration dict
 
         Returns:
             TaskResult with comparison results
@@ -341,6 +348,7 @@ class Scheduler:
             profiler_args=profiler_args,
             rocprof_config=rocprof_config,
             ncu_config=ncu_config,
+            metrix_config=metrix_config,
             compare_config=compare_config,
         )
         return self.execute(task)
@@ -461,6 +469,7 @@ class Scheduler:
         profiler_args: Optional[List[str]] = None,
         rocprof_config: Optional[Dict[str, Any]] = None,
         ncu_config: Optional[Dict[str, Any]] = None,
+        metrix_config: Optional[Dict[str, Any]] = None,
     ) -> List[TaskResult]:
         """
         Run multiple analyze tasks in parallel at Scheduler level.
@@ -495,6 +504,7 @@ class Scheduler:
                 profiler_args=profiler_args,
                 rocprof_config=rocprof_config,
                 ncu_config=ncu_config,
+                metrix_config=metrix_config,
             )
             tasks.append(task)
 
@@ -511,6 +521,7 @@ class Scheduler:
         profiler_args: Optional[List[str]] = None,
         rocprof_config: Optional[Dict[str, Any]] = None,
         ncu_config: Optional[Dict[str, Any]] = None,
+        metrix_config: Optional[Dict[str, Any]] = None,
     ) -> List[TaskResult]:
         """
         Run multiple compare tasks in parallel at Scheduler level.
@@ -544,6 +555,7 @@ class Scheduler:
                 profiler_args=profiler_args,
                 rocprof_config=rocprof_config,
                 ncu_config=ncu_config,
+                metrix_config=metrix_config,
             )
             tasks.append(task)
 

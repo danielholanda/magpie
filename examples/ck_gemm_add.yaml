@@ -20,3 +20,10 @@ kernel:
   #   - ["cmake", "--build", "${CK_HOME}/build", "--target", "test_gemm_add", "-j8"]
   testcase_command: "bin/test_gemm_add"
   working_dir: "${CK_HOME}/build"
+
+# Optional: override the profiling backend for this config
+# Uncomment to use IntelliKit Metrix instead of the default rocprof-compute
+# performance:
+#   backend: metrix
+#   metrix:
+#     num_replays: 3
