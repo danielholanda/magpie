@@ -222,7 +222,7 @@ class BenchmarkMode:
         This allows using Magpie's generic scripts while still leveraging
         InferenceMAX's benchmark_lib.sh and other utilities.
         
-        Note: Won't overwrite existing files to preserve InferenceMAX native scripts.
+        Always overwrites to keep scripts in sync with Magpie source.
         """
         # Magpie scripts location: Magpie/scripts/benchmark/
         magpie_scripts = Path(__file__).parent.parent.parent / "scripts" / "benchmark"
@@ -235,16 +235,12 @@ class BenchmarkMode:
         # Ensure target directory exists
         target_dir.mkdir(parents=True, exist_ok=True)
         
-        # Copy all .sh scripts (don't overwrite existing)
+        # Copy all .sh scripts (always overwrite to keep in sync with Magpie source)
         for script in magpie_scripts.glob("*.sh"):
             target_file = target_dir / script.name
-            if not target_file.exists():
-                shutil.copy2(script, target_file)
-                # Make script executable
-                target_file.chmod(0o755)
-                logger.info(f"Copied Magpie script {script.name} to {target_dir}")
-            else:
-                logger.debug(f"Script {script.name} already exists in {target_dir}, skipping")
+            shutil.copy2(script, target_file)
+            target_file.chmod(0o755)
+            logger.info(f"Copied Magpie script {script.name} to {target_dir}")
     
     def _validate_results(self, result: BenchmarkResult) -> bool:
         """

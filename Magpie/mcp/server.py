@@ -39,9 +39,16 @@ from pathlib import Path
 from typing import List, Dict, Any, TYPE_CHECKING, Optional, Tuple
 
 from mcp.server.fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 # Initialize MCP server
 mcp = FastMCP("magpie")
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health_check(request: Request) -> JSONResponse:
+    return JSONResponse({"status": "ok"})
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

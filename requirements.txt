@@ -9,9 +9,9 @@ mcp>=1.0.0
 # torch>=2.0.0
 # triton>=2.1.0
 
-# Optional: Performance profiling
-# py-spy>=0.3.14
-# memory-profiler>=0.61.0
+# Optional: benchmark profiling (rocm or cuda version)
+# vllm>=0.16.0
+# sglang>=0.5.8
 
 # Optional: ROCm/HIP profiling integration >= 3.40
 # see https://rocm.docs.amd.com/projects/rocprofiler-compute/en/latest/install/core-install.html
