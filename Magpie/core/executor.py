@@ -33,7 +33,7 @@ class ExecutorType(Enum):
 
     LOCAL = "local"
     CONTAINER = "container"
-    # Future: DISTRIBUTED = "distributed"
+    RAY = "ray"
 
 
 @dataclass
@@ -529,12 +529,14 @@ class ContainerExecutor(BaseExecutor):
         return ["--gpus", f'"device={gpu_ids}"']
 
 
-def create_executor(config: ExecutorConfig) -> BaseExecutor:
+def create_executor(config: ExecutorConfig, **kwargs) -> BaseExecutor:
     """
     Factory function to create an executor.
 
     Args:
         config: Executor configuration
+        **kwargs: Extra arguments forwarded to specific executor constructors.
+            For RAY executor, pass ``ray_config`` (a RayConfig instance).
 
     Returns:
         Appropriate executor instance
@@ -543,6 +545,12 @@ def create_executor(config: ExecutorConfig) -> BaseExecutor:
         return LocalExecutor(config)
     elif config.executor_type == ExecutorType.CONTAINER:
         return ContainerExecutor(config)
+    elif config.executor_type == ExecutorType.RAY:
+        from .ray_executor import RayJobExecutor
+        ray_config = kwargs.get("ray_config")
+        if ray_config is None:
+            raise ValueError("ray_config is required for RayJobExecutor")
+        return RayJobExecutor(config, ray_config=ray_config)
     else:
         raise ValueError(f"Unknown executor type: {config.executor_type}")
 

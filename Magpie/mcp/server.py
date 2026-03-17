@@ -20,12 +20,20 @@ Kernel Tools:
   - create_kernel_config: Generate kernel config YAML for CLI use
 
 Benchmark Tools:
-  - benchmark: Run vLLM/SGLang framework benchmark in Docker
+  - benchmark: Run vLLM/SGLang framework benchmark (Docker, local, or Ray)
   - gap_analysis: Run standalone gap analysis on existing torch profiler traces
   - list_benchmark_images: List available Docker images per framework/arch
   - list_benchmark_results: List previous benchmark workspaces and summaries
   - get_benchmark_result: Read detailed results from a specific benchmark run
   - compare_benchmark_reports: Compare TraceLens reports across benchmark runs
+
+Ray Remote Execution Tools:
+  - ray_job_status: Check status of a Ray-submitted job
+  - ray_job_result: Retrieve result from a completed Ray job
+  - ray_job_logs: Fetch logs from a Ray job
+  - ray_job_cancel: Cancel a running Ray job
+  - ray_job_list: List all Magpie-submitted Ray jobs
+  - benchmark_batch: Submit multiple benchmarks to Ray in parallel
 
 Usage:
     python -m Magpie.mcp
@@ -1245,6 +1253,12 @@ def benchmark(
     timeout_seconds: float = 3600.0,
     output_dir: str = "./results",
     extra_envs: Optional[Dict[str, Any]] = None,
+    ray_cluster_address: str = "",
+    ray_shared_storage_path: str = "",
+    ray_num_gpus: int = 0,
+    ray_multi_node: bool = False,
+    ray_total_num_gpus: int = 8,
+    ray_num_nodes: int = 1,
 ) -> str:
     """
     Run a framework-level LLM inference benchmark (vLLM or SGLang).
@@ -1255,12 +1269,16 @@ def benchmark(
 
     InferenceMAX is auto-cloned if not present.
 
+    Supports three execution modes:
+    - "docker": Run inside a Docker container (default)
+    - "local": Run directly on the host
+    - "ray": Submit to a remote Ray cluster (returns immediately with job_id)
+
     Args:
         framework: "vllm" or "sglang"
         model: HuggingFace model name (e.g., "deepseek-ai/DeepSeek-R1-0528")
         precision: Model precision - "fp8", "fp16", "bf16", or "fp4" (default: "fp8")
-        run_mode: Execution mode - "docker" (default) runs inside a container;
-            "local" runs directly on the host (useful inside pods/containers)
+        run_mode: Execution mode - "docker" (default), "local", or "ray"
         tp: Tensor parallelism / number of GPUs (default: 1)
         concurrency: Request concurrency (default: 32)
         input_len: Input sequence length (default: 1024)
@@ -1288,9 +1306,19 @@ def benchmark(
         timeout_seconds: Benchmark timeout in seconds (default: 3600)
         output_dir: Base directory for results (default: "./results")
         extra_envs: Additional environment variables passed to the benchmark
+        ray_cluster_address: Ray head node address for run_mode="ray"
+            (e.g., "http://ray-head:8265")
+        ray_shared_storage_path: Shared NFS path accessible by all Ray nodes
+            (e.g., "/shared_nfs/magpie")
+        ray_num_gpus: Number of GPUs to request for the Ray job entrypoint (default: 0)
+        ray_multi_node: Whether the benchmark needs multiple nodes (default: False)
+        ray_total_num_gpus: Total GPUs across nodes for multi-node (default: 8)
+        ray_num_nodes: Number of nodes for multi-node (default: 1)
 
     Returns:
-        JSON with benchmark results including:
+        JSON with benchmark results. For run_mode="ray", returns immediately
+        with ray_job_id and status="PENDING". Use ray_job_status() to track.
+        For other modes, blocks until complete and returns full results:
         - success: bool
         - framework, model: identifiers
         - throughput: request_throughput (req/s), output_throughput (tok/s), etc.
@@ -1304,6 +1332,7 @@ def benchmark(
         - errors: list of error messages (if any)
     """
     from ..modes.benchmark import BenchmarkMode, BenchmarkConfig
+    from ..modes.benchmark.config import RayConfig
 
     try:
         envs: Dict[str, Any] = {
@@ -1337,6 +1366,19 @@ def benchmark(
             "ignore_categories": gap_analysis_ignore_categories or ["gpu_user_annotation"],
         }
 
+        # Build Ray config if run_mode is "ray"
+        ray_config_dict = None
+        if run_mode == "ray":
+            ray_config_dict = {
+                "cluster_address": ray_cluster_address or "http://localhost:8265",
+                "shared_storage_path": ray_shared_storage_path or "/shared_nfs/magpie",
+                "entrypoint_num_gpus": ray_num_gpus,
+                "multi_node": ray_multi_node,
+                "total_num_gpus": ray_total_num_gpus,
+                "num_nodes": ray_num_nodes,
+                "gpus_per_node": ray_total_num_gpus // max(ray_num_nodes, 1),
+            }
+
         config_dict = {
             "framework": framework,
             "model": model,
@@ -1353,6 +1395,8 @@ def benchmark(
             "benchmark_script": benchmark_script,
             "runner_type": runner_type,
         }
+        if ray_config_dict:
+            config_dict["ray_config"] = ray_config_dict
 
         benchmark_config = BenchmarkConfig.from_dict(config_dict)
 
@@ -1837,6 +1881,419 @@ def compare_benchmark_reports(
 
     except Exception as e:
         logger.exception(f"Benchmark comparison failed: {e}")
+        return json.dumps({"error": str(e)})
+
+
+# =============================================================================
+# Tool 14: ray_job_status
+# =============================================================================
+@mcp.tool()
+def ray_job_status(
+    job_id: str,
+    ray_cluster_address: str = "",
+) -> str:
+    """
+    Check the status of a Ray-submitted benchmark/analysis job.
+
+    Args:
+        job_id: Ray job ID (e.g., "raysubmit_abc123")
+        ray_cluster_address: Ray head address. If empty, uses the address
+            stored in the job record.
+
+    Returns:
+        JSON with job status:
+        - job_id: Ray job ID
+        - status: PENDING, RUNNING, SUCCEEDED, FAILED, or STOPPED
+        - magpie_task_id: associated Magpie task ID
+        - mode_type: benchmark, analyze, or compare
+        - submitted_at: submission timestamp
+        - workspace_dir: path to output directory
+    """
+    try:
+        from ..core.job_store import JobStore
+        from ..modes.benchmark.config import RayConfig
+
+        rc = RayConfig(
+            cluster_address=ray_cluster_address or "http://localhost:8265"
+        )
+        store = JobStore(rc.job_store_path)
+        record = store.get(job_id)
+
+        if record:
+            cluster = ray_cluster_address or record.ray_cluster
+        else:
+            cluster = ray_cluster_address or "http://localhost:8265"
+
+        # Query Ray for live status
+        try:
+            from ray.job_submission import JobSubmissionClient
+            client = JobSubmissionClient(cluster)
+            status = client.get_job_status(job_id)
+            status_str = str(status.value) if hasattr(status, "value") else str(status)
+        except ImportError:
+            return json.dumps({"error": "ray[default] is not installed"})
+        except Exception as e:
+            status_str = f"UNKNOWN ({e})"
+
+        # Update stored record
+        if record:
+            store.update_status(job_id, status_str)
+
+        response: Dict[str, Any] = {
+            "job_id": job_id,
+            "status": status_str,
+        }
+        if record:
+            response.update({
+                "magpie_task_id": record.magpie_task_id,
+                "mode_type": record.mode_type,
+                "submitted_at": record.submitted_at,
+                "workspace_dir": record.workspace_dir,
+                "config_path": record.config_path,
+                "result_path": record.result_path,
+            })
+
+        store.close()
+        return json.dumps(response, indent=2)
+
+    except Exception as e:
+        logger.exception(f"ray_job_status failed: {e}")
+        return json.dumps({"error": str(e), "job_id": job_id})
+
+
+# =============================================================================
+# Tool 15: ray_job_result
+# =============================================================================
+@mcp.tool()
+def ray_job_result(
+    job_id: str,
+    ray_cluster_address: str = "",
+) -> str:
+    """
+    Retrieve the result of a completed Ray job from shared storage.
+
+    Only works after the job has reached SUCCEEDED status.
+
+    Args:
+        job_id: Ray job ID
+        ray_cluster_address: Ray head address (for job store lookup)
+
+    Returns:
+        JSON with the full benchmark/analysis result, or an error if
+        the job has not completed yet.
+    """
+    try:
+        from ..core.job_store import JobStore
+        from ..modes.benchmark.config import RayConfig
+
+        rc = RayConfig(
+            cluster_address=ray_cluster_address or "http://localhost:8265"
+        )
+        store = JobStore(rc.job_store_path)
+        record = store.get(job_id)
+        store.close()
+
+        if not record:
+            return json.dumps({"error": f"Job {job_id} not found in job store"})
+
+        result_path = Path(record.result_path)
+        if not result_path.exists():
+            return json.dumps({
+                "error": f"Result file not found: {record.result_path}",
+                "status": record.status,
+                "hint": "Job may still be running. Check ray_job_status first.",
+            })
+
+        result = json.loads(result_path.read_text())
+        result["_job_id"] = job_id
+        result["_workspace_dir"] = record.workspace_dir
+        return json.dumps(result, indent=2)
+
+    except Exception as e:
+        logger.exception(f"ray_job_result failed: {e}")
+        return json.dumps({"error": str(e), "job_id": job_id})
+
+
+# =============================================================================
+# Tool 16: ray_job_logs
+# =============================================================================
+@mcp.tool()
+def ray_job_logs(
+    job_id: str,
+    ray_cluster_address: str = "",
+    tail: int = 200,
+) -> str:
+    """
+    Fetch logs from a Ray job (running or completed).
+
+    Args:
+        job_id: Ray job ID
+        ray_cluster_address: Ray head address
+        tail: Number of lines from the end to return (default: 200)
+
+    Returns:
+        JSON with the job's stdout/stderr logs.
+    """
+    try:
+        from ..core.job_store import JobStore
+        from ..modes.benchmark.config import RayConfig
+
+        cluster = ray_cluster_address
+        if not cluster:
+            rc = RayConfig()
+            store = JobStore(rc.job_store_path)
+            record = store.get(job_id)
+            store.close()
+            cluster = record.ray_cluster if record else "http://localhost:8265"
+
+        try:
+            from ray.job_submission import JobSubmissionClient
+            client = JobSubmissionClient(cluster)
+            logs = client.get_job_logs(job_id)
+        except ImportError:
+            return json.dumps({"error": "ray[default] is not installed"})
+        except Exception as e:
+            return json.dumps({"error": f"Failed to fetch logs: {e}"})
+
+        # Truncate to tail lines
+        lines = logs.splitlines()
+        if len(lines) > tail:
+            lines = lines[-tail:]
+            logs = "\n".join(lines)
+            truncated = True
+        else:
+            truncated = False
+
+        return json.dumps({
+            "job_id": job_id,
+            "total_lines": len(lines),
+            "truncated": truncated,
+            "logs": logs,
+        }, indent=2)
+
+    except Exception as e:
+        logger.exception(f"ray_job_logs failed: {e}")
+        return json.dumps({"error": str(e), "job_id": job_id})
+
+
+# =============================================================================
+# Tool 17: ray_job_cancel
+# =============================================================================
+@mcp.tool()
+def ray_job_cancel(
+    job_id: str,
+    ray_cluster_address: str = "",
+) -> str:
+    """
+    Cancel a running Ray job.
+
+    Args:
+        job_id: Ray job ID to cancel
+        ray_cluster_address: Ray head address
+
+    Returns:
+        JSON with cancellation result.
+    """
+    try:
+        from ..core.job_store import JobStore
+        from ..modes.benchmark.config import RayConfig
+
+        cluster = ray_cluster_address
+        if not cluster:
+            rc = RayConfig()
+            store = JobStore(rc.job_store_path)
+            record = store.get(job_id)
+            store.close()
+            cluster = record.ray_cluster if record else "http://localhost:8265"
+
+        try:
+            from ray.job_submission import JobSubmissionClient
+            client = JobSubmissionClient(cluster)
+            client.stop_job(job_id)
+        except ImportError:
+            return json.dumps({"error": "ray[default] is not installed"})
+        except Exception as e:
+            return json.dumps({"error": f"Failed to cancel job: {e}"})
+
+        # Update job store
+        try:
+            rc = RayConfig(cluster_address=cluster)
+            store = JobStore(rc.job_store_path)
+            store.update_status(job_id, "STOPPED")
+            store.close()
+        except Exception:
+            pass
+
+        return json.dumps({
+            "job_id": job_id,
+            "status": "STOPPED",
+            "message": f"Job {job_id} cancellation requested",
+        }, indent=2)
+
+    except Exception as e:
+        logger.exception(f"ray_job_cancel failed: {e}")
+        return json.dumps({"error": str(e), "job_id": job_id})
+
+
+# =============================================================================
+# Tool 18: ray_job_list
+# =============================================================================
+@mcp.tool()
+def ray_job_list(
+    ray_cluster_address: str = "",
+    ray_shared_storage_path: str = "",
+    limit: int = 50,
+    status_filter: Optional[str] = None,
+    mode_filter: Optional[str] = None,
+) -> str:
+    """
+    List all Magpie-submitted Ray jobs with their status.
+
+    Args:
+        ray_cluster_address: Ray head address (for refreshing live status)
+        ray_shared_storage_path: Shared storage path (for locating the job store DB)
+        limit: Maximum number of jobs to return (default: 50)
+        status_filter: Filter by status (e.g., "RUNNING", "SUCCEEDED")
+        mode_filter: Filter by mode type (e.g., "benchmark", "analyze")
+
+    Returns:
+        JSON with list of job records.
+    """
+    try:
+        from ..core.job_store import JobStore
+        from ..modes.benchmark.config import RayConfig
+
+        rc = RayConfig(
+            cluster_address=ray_cluster_address or "http://localhost:8265",
+            shared_storage_path=ray_shared_storage_path or "/shared_nfs/magpie",
+        )
+        store = JobStore(rc.job_store_path)
+
+        records = store.list_jobs(
+            limit=limit,
+            status=status_filter,
+            mode_type=mode_filter,
+        )
+
+        # Optionally refresh live status from Ray
+        client = None
+        if ray_cluster_address:
+            try:
+                from ray.job_submission import JobSubmissionClient
+                client = JobSubmissionClient(ray_cluster_address)
+            except (ImportError, Exception):
+                pass
+
+        jobs = []
+        for rec in records:
+            entry: Dict[str, Any] = {
+                "ray_job_id": rec.ray_job_id,
+                "magpie_task_id": rec.magpie_task_id,
+                "mode_type": rec.mode_type,
+                "status": rec.status,
+                "submitted_at": rec.submitted_at,
+                "workspace_dir": rec.workspace_dir,
+            }
+            # Refresh status from Ray if client available
+            if client and rec.status not in ("SUCCEEDED", "FAILED", "STOPPED"):
+                try:
+                    live = client.get_job_status(rec.ray_job_id)
+                    live_str = str(live.value) if hasattr(live, "value") else str(live)
+                    entry["status"] = live_str
+                    store.update_status(rec.ray_job_id, live_str)
+                except Exception:
+                    pass
+
+            jobs.append(entry)
+
+        store.close()
+        return json.dumps({
+            "total": len(jobs),
+            "jobs": jobs,
+        }, indent=2)
+
+    except Exception as e:
+        logger.exception(f"ray_job_list failed: {e}")
+        return json.dumps({"error": str(e)})
+
+
+# =============================================================================
+# Tool 19: benchmark_batch
+# =============================================================================
+@mcp.tool()
+def benchmark_batch(
+    configs: List[Dict[str, Any]],
+    ray_cluster_address: str = "",
+    ray_shared_storage_path: str = "",
+) -> str:
+    """
+    Submit multiple independent benchmarks to a Ray cluster in parallel.
+
+    Each config in the list becomes a separate Ray job running on a
+    different node.  Use ray_job_list and ray_job_status to track progress.
+
+    Args:
+        configs: List of benchmark configuration dicts.  Each dict should have
+            at least "framework" and "model".  Other fields default to the
+            same values as the benchmark() tool.
+        ray_cluster_address: Ray head address (e.g., "http://ray-head:8265")
+        ray_shared_storage_path: Shared NFS path
+
+    Returns:
+        JSON with submitted job IDs and their initial status.
+    """
+    from ..modes.benchmark import BenchmarkMode, BenchmarkConfig
+    from ..modes.benchmark.config import RayConfig
+
+    try:
+        if not configs:
+            return json.dumps({"error": "configs list is empty"})
+
+        results = []
+        for i, cfg in enumerate(configs):
+            try:
+                # Ensure each config uses Ray mode
+                cfg["run_mode"] = "ray"
+                if "ray_config" not in cfg:
+                    cfg["ray_config"] = {
+                        "cluster_address": ray_cluster_address or "http://localhost:8265",
+                        "shared_storage_path": ray_shared_storage_path or "/shared_nfs/magpie",
+                    }
+
+                benchmark_config = BenchmarkConfig.from_dict(cfg)
+                benchmarker = BenchmarkMode(
+                    config=benchmark_config,
+                    output_dir=cfg.get("output_dir", "./results"),
+                )
+                result = benchmarker.run()
+                result_dict = result.to_dict()
+
+                ray_job_id = (result.metadata or {}).get("ray_job_id", "unknown")
+                results.append({
+                    "index": i,
+                    "framework": cfg.get("framework"),
+                    "model": cfg.get("model"),
+                    "ray_job_id": ray_job_id,
+                    "status": "PENDING",
+                    "workspace_dir": result.workspace_dir,
+                })
+
+            except Exception as e:
+                results.append({
+                    "index": i,
+                    "framework": cfg.get("framework"),
+                    "model": cfg.get("model"),
+                    "error": str(e),
+                })
+
+        return json.dumps({
+            "submitted": len([r for r in results if "ray_job_id" in r]),
+            "failed": len([r for r in results if "error" in r]),
+            "jobs": results,
+        }, indent=2)
+
+    except Exception as e:
+        logger.exception(f"benchmark_batch failed: {e}")
         return json.dumps({"error": str(e)})
 
 

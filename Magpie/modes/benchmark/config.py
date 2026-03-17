@@ -22,6 +22,7 @@ class BenchmarkRunMode(Enum):
     """Benchmark execution mode."""
     DOCKER = "docker"
     LOCAL = "local"
+    RAY = "ray"
 
 
 class TraceLensExportFormat(Enum):
@@ -260,6 +261,90 @@ class GapAnalysisConfig:
 
 
 @dataclass
+class RayConfig:
+    """
+    Configuration for Ray remote execution.
+
+    Attributes:
+        cluster_address: Ray head node address (Job Submission API endpoint)
+        shared_storage_path: NFS path mounted on all nodes (MCP server + Ray workers)
+        entrypoint_num_gpus: GPU resources requested for the entrypoint process
+        entrypoint_num_cpus: CPU resources requested for the entrypoint process
+        multi_node: Whether the benchmark requires multiple nodes
+        total_num_gpus: Total GPUs needed across all nodes (for multi-node)
+        num_nodes: Number of nodes required (for multi-node)
+        gpus_per_node: GPUs per node (for multi-node resource calculation)
+        pip_packages: Extra pip packages to install in the Ray runtime environment
+        env_vars: Extra environment variables for the Ray job
+        metadata: Metadata tags attached to the Ray job
+    """
+    cluster_address: str = "http://localhost:8265"
+    shared_storage_path: str = "/shared_nfs/magpie"
+    entrypoint_num_gpus: int = 0
+    entrypoint_num_cpus: int = 4
+    multi_node: bool = False
+    total_num_gpus: int = 8
+    num_nodes: int = 1
+    gpus_per_node: int = 8
+    pip_packages: List[str] = field(default_factory=list)
+    env_vars: Dict[str, str] = field(default_factory=dict)
+    metadata: Dict[str, str] = field(default_factory=dict)
+
+    @property
+    def results_dir(self) -> str:
+        """Directory for benchmark results on the shared storage."""
+        return f"{self.shared_storage_path}/results"
+
+    @property
+    def hf_cache_dir(self) -> str:
+        """HuggingFace model cache on the shared storage."""
+        return f"{self.shared_storage_path}/hf_cache"
+
+    @property
+    def inferencemax_dir(self) -> str:
+        """InferenceMAX installation on the shared storage."""
+        return f"{self.shared_storage_path}/InferenceMAX"
+
+    @property
+    def job_store_path(self) -> str:
+        """SQLite job store path on the shared storage."""
+        return f"{self.shared_storage_path}/.magpie_jobs.db"
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            "cluster_address": self.cluster_address,
+            "shared_storage_path": self.shared_storage_path,
+            "entrypoint_num_gpus": self.entrypoint_num_gpus,
+            "entrypoint_num_cpus": self.entrypoint_num_cpus,
+            "multi_node": self.multi_node,
+            "total_num_gpus": self.total_num_gpus,
+            "num_nodes": self.num_nodes,
+            "gpus_per_node": self.gpus_per_node,
+            "pip_packages": self.pip_packages,
+            "env_vars": self.env_vars,
+            "metadata": self.metadata,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "RayConfig":
+        """Create from dictionary."""
+        return cls(
+            cluster_address=data.get("cluster_address", "http://localhost:8265"),
+            shared_storage_path=data.get("shared_storage_path", "/shared_nfs/magpie"),
+            entrypoint_num_gpus=data.get("entrypoint_num_gpus", 0),
+            entrypoint_num_cpus=data.get("entrypoint_num_cpus", 4),
+            multi_node=data.get("multi_node", False),
+            total_num_gpus=data.get("total_num_gpus", 8),
+            num_nodes=data.get("num_nodes", 1),
+            gpus_per_node=data.get("gpus_per_node", 8),
+            pip_packages=data.get("pip_packages", []),
+            env_vars=data.get("env_vars", {}),
+            metadata=data.get("metadata", {}),
+        )
+
+
+@dataclass
 class BenchmarkConfig:
     """
     Configuration for benchmark mode.
@@ -268,7 +353,7 @@ class BenchmarkConfig:
         framework: Benchmark framework ("vllm" or "sglang")
         model: Model name or path (e.g., "meta-llama/Llama-2-7b-hf")
         precision: Model precision ("fp8", "fp16", "bf16", "fp4")
-        run_mode: Execution mode - "docker" (default) or "local"
+        run_mode: Execution mode - "docker" (default), "local", or "ray"
         envs: Environment variables for benchmark (TP, CONC, ISL, OSL, etc.)
         profiler: Profiler configuration
         docker_image: Override automatic image selection
@@ -282,7 +367,7 @@ class BenchmarkConfig:
     model: str
     precision: str = "fp8"
     
-    # Execution mode: "docker" or "local"
+    # Execution mode: "docker", "local", or "ray"
     run_mode: str = "docker"
     
     # Environment variables for benchmark
@@ -307,6 +392,9 @@ class BenchmarkConfig:
     runner_type: Optional[str] = None
     benchmark_script: Optional[str] = None
     
+    # Ray remote execution configuration (used when run_mode="ray")
+    ray_config: Optional[RayConfig] = None
+    
     def __post_init__(self):
         """Validate and set defaults."""
         # Normalize framework name
@@ -316,8 +404,8 @@ class BenchmarkConfig:
         
         # Validate run_mode
         self.run_mode = self.run_mode.lower()
-        if self.run_mode not in ("docker", "local"):
-            raise ValueError(f"Unsupported run_mode: {self.run_mode}. Use 'docker' or 'local'.")
+        if self.run_mode not in ("docker", "local", "ray"):
+            raise ValueError(f"Unsupported run_mode: {self.run_mode}. Use 'docker', 'local', or 'ray'.")
         
         # Set default envs if not provided
         if not self.envs:
@@ -336,6 +424,14 @@ class BenchmarkConfig:
         # Convert gap_analysis dict to GapAnalysisConfig if needed
         if isinstance(self.gap_analysis, dict):
             self.gap_analysis = GapAnalysisConfig.from_dict(self.gap_analysis)
+        
+        # Convert ray_config dict to RayConfig if needed
+        if isinstance(self.ray_config, dict):
+            self.ray_config = RayConfig.from_dict(self.ray_config)
+        
+        # Ensure ray_config exists when run_mode is "ray"
+        if self.run_mode == "ray" and self.ray_config is None:
+            self.ray_config = RayConfig()
     
     def get_env_vars(self) -> Dict[str, str]:
         """
@@ -380,9 +476,14 @@ class BenchmarkConfig:
         """Check if running in local mode (no Docker)."""
         return self.run_mode == "local"
 
+    @property
+    def is_ray(self) -> bool:
+        """Check if running in Ray remote execution mode."""
+        return self.run_mode == "ray"
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
-        return {
+        d: Dict[str, Any] = {
             "framework": self.framework,
             "model": self.model,
             "precision": self.precision,
@@ -398,6 +499,9 @@ class BenchmarkConfig:
             "runner_type": self.runner_type,
             "benchmark_script": self.benchmark_script,
         }
+        if self.ray_config is not None:
+            d["ray_config"] = self.ray_config.to_dict()
+        return d
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "BenchmarkConfig":
@@ -407,6 +511,9 @@ class BenchmarkConfig:
         
         gap_data = data.get("gap_analysis", {})
         gap_analysis = GapAnalysisConfig.from_dict(gap_data) if gap_data else GapAnalysisConfig()
+        
+        ray_data = data.get("ray_config")
+        ray_config = RayConfig.from_dict(ray_data) if ray_data else None
         
         return cls(
             framework=data.get("framework", "sglang"),
@@ -423,5 +530,6 @@ class BenchmarkConfig:
             hf_cache_path=data.get("hf_cache_path"),
             runner_type=data.get("runner_type"),
             benchmark_script=data.get("benchmark_script"),
+            ray_config=ray_config,
         )
 

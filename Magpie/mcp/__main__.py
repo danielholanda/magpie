@@ -32,6 +32,7 @@ if __name__ == "__main__":
 
     if args.host:
         mcp.settings.host = args.host
+        mcp.settings.transport_security = None
     if args.port:
         mcp.settings.port = args.port
 

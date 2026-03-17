@@ -34,8 +34,9 @@ class BenchmarkMode:
     Benchmark mode for framework-level profiling.
     
     Uses InferenceMAX as backend to run vLLM/SGLang benchmarks
-    either inside Docker containers (run_mode=docker) or directly
-    on the host (run_mode=local).
+    either inside Docker containers (run_mode=docker), directly
+    on the host (run_mode=local), or on a remote Ray cluster
+    (run_mode=ray).
     """
     
     def __init__(
@@ -74,6 +75,10 @@ class BenchmarkMode:
         start_time = time.time()
         
         logger.info(f"Starting benchmark: {self.config.framework} / {self.config.model}")
+        
+        # Ray mode: delegate to remote cluster and return immediately
+        if self.config.is_ray:
+            return self._execute_ray_benchmark()
         
         # 0. Ensure InferenceMAX is available (auto-clone if needed)
         try:
@@ -810,6 +815,78 @@ class BenchmarkMode:
             logger.exception(f"Gap analysis failed: {e}")
             return {"enabled": True, "error": str(e)}
     
+    def _execute_ray_benchmark(self) -> BenchmarkResult:
+        """
+        Submit benchmark to a remote Ray cluster.
+
+        Writes the config to shared NFS and uses the RayJobExecutor to submit.
+        Returns a BenchmarkResult whose ``metadata`` contains the ``ray_job_id``
+        for later status polling.
+        """
+        from ...core.ray_executor import RayJobExecutor
+        from ...core.executor import ExecutorConfig, ExecutorType
+        from ...core.task import Task, ModeType, ModeConfig
+
+        result = BenchmarkResult()
+        rc = self.config.ray_config
+        if rc is None:
+            result.success = False
+            result.errors.append("ray_config is required when run_mode='ray'")
+            return result
+
+        try:
+            executor_config = ExecutorConfig(
+                executor_type=ExecutorType.RAY,
+                timeout_seconds=self.config.timeout_seconds,
+            )
+            executor = RayJobExecutor(executor_config, ray_config=rc)
+
+            if not executor.start():
+                result.success = False
+                result.errors.append(
+                    f"Failed to connect to Ray cluster at {rc.cluster_address}"
+                )
+                return result
+
+            # Build a Magpie Task wrapping the benchmark config
+            mode_config = ModeConfig(
+                mode_type=ModeType.BENCHMARK,
+                gpu_arch=self.config.gpu_arch,
+                timeout_seconds=self.config.timeout_seconds,
+                benchmark_config=self.config.to_dict(),
+            )
+            task = Task(
+                kernel_configs=[],
+                mode_config=mode_config,
+                task_id=self._task_id,
+            )
+
+            ray_job_id = executor._submit_ray_job(task)
+
+            result.success = True
+            result.framework = self.config.framework
+            result.model = self.config.model
+            result.workspace_dir = str(
+                Path(rc.results_dir) / self._task_id
+            )
+            result.metadata = {
+                "ray_job_id": ray_job_id,
+                "ray_cluster": rc.cluster_address,
+                "status": "PENDING",
+                "message": (
+                    "Benchmark submitted to Ray cluster. "
+                    "Use ray_job_status / ray_job_result tools to track progress."
+                ),
+            }
+            logger.info(f"Benchmark submitted as Ray job {ray_job_id}")
+            return result
+
+        except Exception as e:
+            result.success = False
+            result.errors.append(f"Ray submission failed: {e}")
+            logger.exception(f"Ray benchmark submission failed: {e}")
+            return result
+
     def cleanup(self) -> None:
         """Clean up resources."""
         if self._task_id and not self.config.is_local:
