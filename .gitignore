@@ -92,6 +92,7 @@ InferenceMAX/
 *.out
 *.o
 *.a
+examples/simple_hip_test/vector_add
 
 # Profiling outputs
 *.prof

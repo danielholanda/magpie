@@ -603,6 +603,7 @@ def _execute_task_worker(task_dict: Dict[str, Any]) -> Dict[str, Any]:
                 rocprof_config=mode_cfg.get("rocprof_config", {}),
                 ncu_config=mode_cfg.get("ncu_config", {}),
                 metrix_config=mode_cfg.get("metrix_config", {}),
+                correctness_config=mode_cfg.get("correctness_config", {}),
                 gpu_arch=mode_cfg.get("gpu_arch", None),
             )
             analyzer = AnalyzeMode(analyze_config)
@@ -626,6 +627,7 @@ def _execute_task_worker(task_dict: Dict[str, Any]) -> Dict[str, Any]:
                 rocprof_config=mode_cfg.get("rocprof_config", {}),
                 ncu_config=mode_cfg.get("ncu_config", {}),
                 metrix_config=mode_cfg.get("metrix_config", {}),
+                correctness_config=mode_cfg.get("correctness_config", {}),
                 gpu_arch=mode_cfg.get("gpu_arch", None),
                 winner_strategy=compare_cfg.get("winner_strategy", "perf_score"),
                 perf_weights_rocprof=compare_cfg.get("perf_weights_rocprof", {}),

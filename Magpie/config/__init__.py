@@ -21,7 +21,9 @@ from .kernel import (
 )
 from .correctness import (
     CorrectnessMode,
+    CorrectnessBackend,
     CorrectnessConfig,
+    AccordoConfig,
     AlgorithmThresholds,
 )
 from .performance import (
@@ -45,7 +47,9 @@ __all__ = [
     "KernelEvalConfig",
     # Correctness configuration
     "CorrectnessMode",
+    "CorrectnessBackend",
     "CorrectnessConfig",
+    "AccordoConfig",
     "AlgorithmThresholds",
     # Performance configuration
     "PerfBackend",

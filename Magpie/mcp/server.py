@@ -117,6 +117,12 @@ def _get_scheduler_config_from_yaml(environment: str = "local") -> "SchedulerCon
     )
 
 
+def _get_correctness_settings_from_yaml() -> Dict[str, Any]:
+    """Read correctness settings from framework config.yaml."""
+    from ..main import _get_correctness_config
+    return _get_correctness_config(_load_framework_config())
+
+
 def _get_perf_settings_from_yaml() -> Dict[str, Any]:
     """Read performance profiler settings from framework config.yaml.
 
@@ -211,6 +217,12 @@ def analyze(
     check_performance: bool = True,
     environment: str = "local",
     performance_backend: str = "",
+    correctness_backend: str = "",
+    accordo_kernel_name: str = "",
+    accordo_reference_binary: str = "",
+    accordo_optimized_binary: str = "",
+    accordo_tolerance: float = 1e-6,
+    accordo_timeout_seconds: int = 30,
 ) -> str:
     """
     Analyze a GPU kernel for correctness and performance.
@@ -224,6 +236,12 @@ def analyze(
         check_performance: Run performance profiling (default: True)
         environment: Execution environment "local" or "container"
         performance_backend: Profiling backend override: "metrix", "rocprof_compute", or "ncu" (default: auto)
+        correctness_backend: Correctness backend override: "accordo" or "testcase" (default: auto from config)
+        accordo_kernel_name: Kernel function name for Accordo validation (required when correctness_backend="accordo")
+        accordo_reference_binary: Reference binary for Accordo comparison
+        accordo_optimized_binary: Optimized binary for Accordo comparison
+        accordo_tolerance: Tolerance for Accordo np.allclose comparison (default: 1e-6)
+        accordo_timeout_seconds: Timeout per snapshot capture in seconds (default: 30)
 
     Returns:
         JSON with comprehensive analysis results including:
@@ -280,6 +298,7 @@ def analyze(
 
         try:
             perf_settings = _get_perf_settings_from_yaml()
+            corr_settings = _get_correctness_settings_from_yaml()
 
             # Apply per-call backend override
             if performance_backend:
@@ -287,6 +306,20 @@ def analyze(
                 perf_settings = _apply_perf_overrides(
                     perf_settings, {"backend": performance_backend}, ktype
                 )
+
+            if correctness_backend:
+                from ..main import _apply_correctness_overrides
+                overrides: Dict[str, Any] = {"backend": correctness_backend}
+                if correctness_backend == "accordo":
+                    overrides["accordo"] = {
+                        "kernel_name": accordo_kernel_name or None,
+                        "reference_binary": accordo_reference_binary or None,
+                        "optimized_binary": accordo_optimized_binary or None,
+                        "tolerance": accordo_tolerance,
+                        "timeout_seconds": accordo_timeout_seconds,
+                        "working_directory": working_dir or None,
+                    }
+                corr_settings = _apply_correctness_overrides(corr_settings, overrides)
 
             task_result = scheduler.run_analyze(
                 kernel_configs=[kernel_config],
@@ -296,6 +329,7 @@ def analyze(
                 rocprof_config=perf_settings["rocprof_config"],
                 ncu_config=perf_settings["ncu_config"],
                 metrix_config=perf_settings["metrix_config"],
+                correctness_config=corr_settings,
             )
 
             if task_result.success and task_result.results:
@@ -510,6 +544,12 @@ def compare(
     check_performance: bool = True,
     environment: str = "local",
     performance_backend: str = "",
+    correctness_backend: str = "",
+    accordo_kernel_name: str = "",
+    accordo_reference_binary: str = "",
+    accordo_optimized_binary: str = "",
+    accordo_tolerance: float = 1e-6,
+    accordo_timeout_seconds: int = 30,
 ) -> str:
     """
     Compare multiple GPU kernels for performance and correctness.
@@ -525,6 +565,12 @@ def compare(
         check_performance: Run performance profiling (default: True)
         environment: Execution environment "local" or "container"
         performance_backend: Profiling backend override: "metrix", "rocprof_compute", or "ncu" (default: auto)
+        correctness_backend: Correctness backend override: "accordo" or "testcase" (default: auto from config)
+        accordo_kernel_name: Kernel function name for Accordo validation (required when correctness_backend="accordo")
+        accordo_reference_binary: Reference binary for Accordo comparison
+        accordo_optimized_binary: Optimized binary for Accordo comparison
+        accordo_tolerance: Tolerance for Accordo np.allclose comparison (default: 1e-6)
+        accordo_timeout_seconds: Timeout per snapshot capture in seconds (default: 30)
 
     Returns:
         JSON with comparison results, ranking, and summary
@@ -592,6 +638,7 @@ def compare(
 
         try:
             perf_settings = _get_perf_settings_from_yaml()
+            corr_settings = _get_correctness_settings_from_yaml()
 
             # Apply per-call backend override
             if performance_backend:
@@ -599,6 +646,21 @@ def compare(
                 perf_settings = _apply_perf_overrides(
                     perf_settings, {"backend": performance_backend}, ktype
                 )
+
+            if correctness_backend:
+                from ..main import _apply_correctness_overrides
+                corr_overrides: Dict[str, Any] = {"backend": correctness_backend}
+                if correctness_backend == "accordo":
+                    first_wd = kernel_configs[0].working_dir if kernel_configs else None
+                    corr_overrides["accordo"] = {
+                        "kernel_name": accordo_kernel_name or None,
+                        "reference_binary": accordo_reference_binary or None,
+                        "optimized_binary": accordo_optimized_binary or None,
+                        "tolerance": accordo_tolerance,
+                        "timeout_seconds": accordo_timeout_seconds,
+                        "working_directory": first_wd,
+                    }
+                corr_settings = _apply_correctness_overrides(corr_settings, corr_overrides)
 
             task_result = scheduler.run_compare(
                 kernel_configs=kernel_configs,
@@ -609,6 +671,7 @@ def compare(
                 rocprof_config=perf_settings["rocprof_config"],
                 ncu_config=perf_settings["ncu_config"],
                 metrix_config=perf_settings["metrix_config"],
+                correctness_config=corr_settings,
             )
 
             if task_result.success and task_result.results:

@@ -58,6 +58,7 @@ class AnalyzeConfig:
     rocprof_config: Dict[str, Any] = field(default_factory=dict)
     ncu_config: Dict[str, Any] = field(default_factory=dict)
     metrix_config: Dict[str, Any] = field(default_factory=dict)
+    correctness_config: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         if self.gpu_arch is None:
@@ -140,6 +141,9 @@ class AnalyzeMode:
             if self.config.metrix_config.get("backend") == "metrix":
                 explicit_backend = PerfBackend.METRIX
 
+        # Build correctness config
+        corr_cfg = self._build_correctness_config()
+
         # Build pipeline config for analyze mode
         pipeline_cfg = PipelineConfig(
             mode=EvalMode.ANALYZE,
@@ -148,9 +152,7 @@ class AnalyzeMode:
             compiling_config=CompilingConfig(
                 enable_default_compile=self.config.enable_default_compile,
             ),
-            correctness_config=CorrectnessConfig(
-                mode=CorrectnessMode.TESTCASE,
-            ),
+            correctness_config=corr_cfg,
             performance_config=PerformanceConfig(
                 enabled=self.config.check_performance,
                 backend=explicit_backend,
@@ -196,6 +198,12 @@ class AnalyzeMode:
             results.append(state)
 
         return results
+
+    def _build_correctness_config(self) -> CorrectnessConfig:
+        """Build CorrectnessConfig from the correctness_config dict."""
+        return CorrectnessConfig.from_dict(
+            self.config.correctness_config, mode=CorrectnessMode.TESTCASE
+        )
 
     def _log_summary(
         self, kernel_cfg: KernelEvalConfig, state: EvaluationState

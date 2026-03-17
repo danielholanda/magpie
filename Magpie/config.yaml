@@ -78,6 +78,22 @@ logging:
   file: null   # Set path for file logging
 
 # =============================================================================
+# Correctness
+# =============================================================================
+correctness:
+  # Backend: "testcase" (default) or "accordo"
+  # "testcase" uses testcase_command exit codes (current default behaviour).
+  # "accordo" uses IntelliKit Accordo HSA-level kernel output validation.
+  # backend: testcase
+
+  # IntelliKit Accordo settings (AMD GPU)
+  # Captures kernel output buffers and compares reference vs. optimized.
+  # Activate by setting: backend: accordo
+  accordo:
+    tolerance: 1.0e-6          # Absolute tolerance for np.allclose comparison
+    timeout_seconds: 30        # Timeout per snapshot capture
+
+# =============================================================================
 # Compiling
 # =============================================================================
 compiling:

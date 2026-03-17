@@ -33,16 +33,27 @@ from ..config import (
     PipelineConfig,
     KernelEvalConfig,
     CorrectnessConfig,
+    CorrectnessBackend,
+    AccordoConfig,
 )
 
-# Optional torch import
-try:
-    import torch
+# Torch is imported lazily to avoid initializing HIP/CUDA at module load time,
+# which would break Accordo's HSA interception (IPC memory handles).
+HAS_TORCH = False
+torch = None
 
-    HAS_TORCH = True
-except ImportError:
-    HAS_TORCH = False
-    torch = None
+
+def _ensure_torch():
+    global HAS_TORCH, torch
+    if torch is not None or HAS_TORCH:
+        return
+    try:
+        import torch as _torch
+
+        torch = _torch
+        HAS_TORCH = True
+    except ImportError:
+        HAS_TORCH = False
 
 if TYPE_CHECKING:
     pass
@@ -111,6 +122,9 @@ class Correctness:
             CorrectnessResult with pass/fail status
         """
         try:
+            if self.corr_cfg.backend == CorrectnessBackend.ACCORDO:
+                return self._run_accordo_mode(eval_state, kernel_cfg)
+
             mode = self.pipeline_cfg.mode
 
             if mode == EvalMode.ANALYZE:
@@ -229,6 +243,7 @@ class Correctness:
 
         Generate test inputs using get_inputs function and compare outputs.
         """
+        _ensure_torch()
         if not HAS_TORCH:
             return CorrectnessResult(
                 success=False, errors="PyTorch not available for comparison"
@@ -402,6 +417,128 @@ class Correctness:
             )
         except Exception as e:
             return CorrectnessResult(success=False, errors=str(e))
+
+    def _run_accordo_mode(
+        self, eval_state: Any, kernel_cfg: KernelEvalConfig
+    ) -> CorrectnessResult:
+        """
+        Run Accordo HSA-level correctness validation.
+
+        Uses IntelliKit Accordo to capture GPU kernel output buffers from
+        reference and optimized binaries, then compares them element-wise.
+        """
+        try:
+            from accordo import Accordo, AccordoError
+        except ImportError:
+            return CorrectnessResult(
+                success=False,
+                errors=(
+                    "accordo not found. Install IntelliKit Accordo "
+                    "(pip install intellikit[accordo] or "
+                    "pip install -e /path/to/intellikit/accordo)."
+                ),
+            )
+
+        accordo_cfg: AccordoConfig = self.corr_cfg.accordo_config or AccordoConfig()
+
+        kernel_name = accordo_cfg.kernel_name
+        if not kernel_name:
+            return CorrectnessResult(
+                success=False,
+                errors="Accordo backend requires 'kernel_name' to be set in accordo config.",
+            )
+
+        ref_binary = accordo_cfg.reference_binary
+        opt_binary = accordo_cfg.optimized_binary
+        if not ref_binary or not opt_binary:
+            return CorrectnessResult(
+                success=False,
+                errors="Accordo backend requires both 'reference_binary' and "
+                "'optimized_binary' to be set in accordo config.",
+            )
+
+        tolerance = accordo_cfg.tolerance
+        timeout = accordo_cfg.timeout_seconds
+        working_dir = accordo_cfg.working_directory or kernel_cfg.working_dir or "."
+        working_dir = str(Path(working_dir).resolve())
+
+        try:
+            validator = Accordo(
+                binary=ref_binary,
+                kernel_name=kernel_name,
+                kernel_args=accordo_cfg.kernel_args,
+                working_directory=working_dir,
+                log_level="WARNING",
+            )
+
+            logger.info(
+                "Accordo: capturing reference snapshot from %s", ref_binary
+            )
+            ref_snapshot = validator.capture_snapshot(
+                binary=ref_binary, timeout_seconds=timeout
+            )
+
+            logger.info(
+                "Accordo: capturing optimized snapshot from %s", opt_binary
+            )
+            opt_snapshot = validator.capture_snapshot(
+                binary=opt_binary, timeout_seconds=timeout
+            )
+
+            logger.info(
+                "Accordo: comparing snapshots (tolerance=%e)", tolerance
+            )
+            validation = validator.compare_snapshots(
+                ref_snapshot, opt_snapshot, tolerance=tolerance
+            )
+
+            metrics = []
+            if validation.is_valid:
+                metrics.append(
+                    MetricResult(
+                        name="accordo_validation",
+                        success=True,
+                        value=float(validation.num_arrays_validated),
+                    )
+                )
+                for arr_name, _ in (validation.matched_arrays or {}).items():
+                    metrics.append(
+                        MetricResult(
+                            name=f"accordo_array_{arr_name}",
+                            success=True,
+                            threshold=tolerance,
+                        )
+                    )
+            else:
+                metrics.append(
+                    MetricResult(
+                        name="accordo_validation",
+                        success=False,
+                        value=float(validation.num_mismatches),
+                    )
+                )
+                for mismatch in validation.mismatches or []:
+                    metrics.append(
+                        MetricResult(
+                            name=f"accordo_mismatch_{mismatch.arg_name}",
+                            success=False,
+                            value=mismatch.max_difference,
+                            threshold=tolerance,
+                        )
+                    )
+
+            return CorrectnessResult(
+                success=validation.is_valid,
+                metrics=metrics,
+                errors=validation.error_message if not validation.is_valid else None,
+            )
+
+        except AccordoError as e:
+            return CorrectnessResult(success=False, errors=f"Accordo error: {e}")
+        except Exception as e:
+            return CorrectnessResult(
+                success=False, errors=f"Accordo unexpected error: {e}"
+            )
 
     def _load_module(self, file_path: str) -> ModuleType:
         """Load a Python module from file."""
