@@ -18,8 +18,10 @@ kernel:
   testcase_command: "./vector_add"
   working_dir: "examples/simple_hip_test"
 
-# Optional: override the correctness backend for this config
-# Uncomment to use IntelliKit Accordo instead of the default testcase exit-code
+# Override the correctness backend to Accordo.
+# timeout_seconds defaults from the task-level timeout.
+# working_directory defaults from the kernel's working_dir.
+# The Accordo CLI runs from the result workspace directory.
 correctness:
   backend: accordo
   accordo:
@@ -27,5 +29,3 @@ correctness:
     reference_binary: "./vector_add"
     optimized_binary: "./vector_add"
     tolerance: 1.0e-6
-    timeout_seconds: 30
-    working_directory: "examples/simple_hip_test"

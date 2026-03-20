@@ -18,7 +18,7 @@ kernel:
   # compile_command:
   #   - ["cmake", "-S", "${CK_HOME}", "-B", "${CK_HOME}/build", "-D", "CMAKE_PREFIX_PATH=/opt/rocm", "-D", "CMAKE_CXX_COMPILER=/opt/rocm/bin/hipcc", "-D", "CMAKE_BUILD_TYPE=Release", "-D", "GPU_TARGETS=gfx950"]
   #   - ["cmake", "--build", "${CK_HOME}/build", "--target", "test_gemm_add", "-j8"]
-  testcase_command: "bin/test_gemm_add"
+  testcase_command: "bin/test_gemm_add_xdl"
   working_dir: "${CK_HOME}/build"
 
 # Optional: override the profiling backend for this config

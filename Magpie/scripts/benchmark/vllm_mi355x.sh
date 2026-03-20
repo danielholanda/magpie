@@ -31,21 +31,23 @@ if [[ "$version" == "" || $version -lt 177 ]]; then
   export HSA_NO_SCRATCH_RECLAIM=1
 fi
 
-# Set HIP_VISIBLE_DEVICES to match ROCR_VISIBLE_DEVICES for Ray compatibility in vLLM 0.14+
-if [ -n "$ROCR_VISIBLE_DEVICES" ]; then
+# Set HIP_VISIBLE_DEVICES only when the caller has not already provided
+# a logical remapping for the ROCR-filtered device list.
+if [ -n "$ROCR_VISIBLE_DEVICES" ] && [ -z "$HIP_VISIBLE_DEVICES" ]; then
     export HIP_VISIBLE_DEVICES="$ROCR_VISIBLE_DEVICES"
 fi
 
 # vLLM optimizations for MI355X
 export VLLM_ROCM_USE_AITER=1
 
-SERVER_LOG=${SERVER_LOG:-/workspace/server.log}
+WORKSPACE_DIR=${RESULT_DIR:-/workspace}
+SERVER_LOG=${SERVER_LOG:-$WORKSPACE_DIR/server.log}
 PORT=${PORT:-8888}
 
 # Build profiler args for vLLM >= 0.15 (env var VLLM_TORCH_PROFILER_DIR is deprecated)
 PROFILER_ARGS=()
 if [[ "${PROFILE:-}" == "1" ]]; then
-  TRACE_DIR="${VLLM_TORCH_PROFILER_DIR:-/workspace/torch_trace}"
+  TRACE_DIR="${VLLM_TORCH_PROFILER_DIR:-$WORKSPACE_DIR/torch_trace}"
   mkdir -p "$TRACE_DIR"
   PROFILER_ARGS+=(--profiler-config.profiler torch)
   PROFILER_ARGS+=(--profiler-config.torch_profiler_dir "$TRACE_DIR")
@@ -80,7 +82,7 @@ run_benchmark_serving \
     --num-prompts $(( $CONC * 10 )) \
     --max-concurrency "$CONC" \
     --result-filename "$RESULT_FILENAME" \
-    --result-dir /workspace/ \
+    --result-dir "$WORKSPACE_DIR/" \
     --server-pid "$SERVER_PID" \
     --trust-remote-code
 
@@ -90,4 +92,3 @@ if [ "${RUN_EVAL}" = "true" ]; then
     append_lm_eval_summary
 fi
 set +x
-

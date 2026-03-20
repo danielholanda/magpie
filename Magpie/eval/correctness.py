@@ -18,8 +18,10 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import logging
 import random
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -422,18 +424,17 @@ class Correctness:
         self, eval_state: Any, kernel_cfg: KernelEvalConfig
     ) -> CorrectnessResult:
         """
-        Run Accordo HSA-level correctness validation.
+        Run Accordo HSA-level correctness validation via the ``accordo`` CLI.
 
-        Uses IntelliKit Accordo to capture GPU kernel output buffers from
-        reference and optimized binaries, then compares them element-wise.
+        Invokes ``accordo validate`` as a subprocess so that HSA interception,
+        signal-based timeouts, and ``os.chdir`` are fully isolated from the
+        Magpie host process (important for Ray / multi-worker execution).
         """
-        try:
-            from accordo import Accordo, AccordoError
-        except ImportError:
+        if not shutil.which("accordo"):
             return CorrectnessResult(
                 success=False,
                 errors=(
-                    "accordo not found. Install IntelliKit Accordo "
+                    "'accordo' CLI not found on PATH. Install IntelliKit Accordo "
                     "(pip install intellikit[accordo] or "
                     "pip install -e /path/to/intellikit/accordo)."
                 ),
@@ -458,87 +459,122 @@ class Correctness:
             )
 
         tolerance = accordo_cfg.tolerance
-        timeout = accordo_cfg.timeout_seconds
-        working_dir = accordo_cfg.working_directory or kernel_cfg.working_dir or "."
-        working_dir = str(Path(working_dir).resolve())
+        perf_timeout = getattr(
+            self.pipeline_cfg.performance_config, "timeout_seconds", None
+        )
+        timeout = accordo_cfg.timeout_seconds or perf_timeout or 300
+
+        binary_working_dir = (
+            accordo_cfg.working_directory or kernel_cfg.working_dir or "."
+        )
+        binary_working_dir = str(Path(binary_working_dir).resolve())
+
+        workspace_dir = accordo_cfg.workspace_path or binary_working_dir
+
+        cmd = [
+            "accordo", "validate",
+            "--kernel-name", kernel_name,
+            "--ref-binary", ref_binary,
+            "--opt-binary", opt_binary,
+            "--tolerance", str(tolerance),
+            "--timeout", str(int(timeout)),
+            "--working-dir", binary_working_dir,
+            "--log-level", "INFO",
+        ]
+
+        if accordo_cfg.kernel_args:
+            args_str = ",".join(
+                f"{name}:{typ}" for name, typ in accordo_cfg.kernel_args
+            )
+            cmd.extend(["--kernel-args", args_str])
+
+        logger.info("Accordo CLI: %s (cwd=%s)", " ".join(cmd), workspace_dir)
 
         try:
-            validator = Accordo(
-                binary=ref_binary,
-                kernel_name=kernel_name,
-                kernel_args=accordo_cfg.kernel_args,
-                working_directory=working_dir,
-                log_level="WARNING",
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                cwd=workspace_dir,
+                timeout=int(timeout) * 2 + 60,
+            )
+        except subprocess.TimeoutExpired:
+            return CorrectnessResult(
+                success=False,
+                errors=f"Accordo CLI timed out after {int(timeout) * 2 + 60}s",
+            )
+        except FileNotFoundError:
+            return CorrectnessResult(
+                success=False,
+                errors="'accordo' CLI not found. Is it installed?",
             )
 
-            logger.info(
-                "Accordo: capturing reference snapshot from %s", ref_binary
-            )
-            ref_snapshot = validator.capture_snapshot(
-                binary=ref_binary, timeout_seconds=timeout
-            )
-
-            logger.info(
-                "Accordo: capturing optimized snapshot from %s", opt_binary
-            )
-            opt_snapshot = validator.capture_snapshot(
-                binary=opt_binary, timeout_seconds=timeout
+        if proc.returncode != 0:
+            stdout = proc.stdout.strip()
+            try:
+                err_data = json.loads(stdout)
+                error_msg = err_data.get("error", stdout)
+            except (json.JSONDecodeError, ValueError):
+                error_msg = stdout or proc.stderr.strip()
+            return CorrectnessResult(
+                success=False, errors=f"Accordo error: {error_msg}"
             )
 
-            logger.info(
-                "Accordo: comparing snapshots (tolerance=%e)", tolerance
-            )
-            validation = validator.compare_snapshots(
-                ref_snapshot, opt_snapshot, tolerance=tolerance
+        try:
+            raw = proc.stdout.strip()
+            json_start = raw.find("{")
+            json_end = raw.rfind("}") + 1
+            if json_start < 0 or json_end <= json_start:
+                raise ValueError("No JSON object found in output")
+            output = json.loads(raw[json_start:json_end])
+        except (json.JSONDecodeError, ValueError):
+            return CorrectnessResult(
+                success=False,
+                errors=f"Accordo CLI returned invalid JSON: {proc.stdout[:500]}",
             )
 
-            metrics = []
-            if validation.is_valid:
+        is_valid = output.get("is_valid", False)
+        metrics = []
+
+        if is_valid:
+            metrics.append(
+                MetricResult(
+                    name="accordo_validation",
+                    success=True,
+                    value=float(output.get("num_arrays_validated", 0)),
+                )
+            )
+            for arr_name in output.get("matched_arrays", {}):
                 metrics.append(
                     MetricResult(
-                        name="accordo_validation",
+                        name=f"accordo_array_{arr_name}",
                         success=True,
-                        value=float(validation.num_arrays_validated),
+                        threshold=tolerance,
                     )
                 )
-                for arr_name, _ in (validation.matched_arrays or {}).items():
-                    metrics.append(
-                        MetricResult(
-                            name=f"accordo_array_{arr_name}",
-                            success=True,
-                            threshold=tolerance,
-                        )
-                    )
-            else:
+        else:
+            metrics.append(
+                MetricResult(
+                    name="accordo_validation",
+                    success=False,
+                    value=float(output.get("num_mismatches", 0)),
+                )
+            )
+            for mismatch in output.get("mismatches", []):
                 metrics.append(
                     MetricResult(
-                        name="accordo_validation",
+                        name=f"accordo_mismatch_{mismatch.get('arg_name', '?')}",
                         success=False,
-                        value=float(validation.num_mismatches),
+                        value=mismatch.get("max_difference"),
+                        threshold=tolerance,
                     )
                 )
-                for mismatch in validation.mismatches or []:
-                    metrics.append(
-                        MetricResult(
-                            name=f"accordo_mismatch_{mismatch.arg_name}",
-                            success=False,
-                            value=mismatch.max_difference,
-                            threshold=tolerance,
-                        )
-                    )
 
-            return CorrectnessResult(
-                success=validation.is_valid,
-                metrics=metrics,
-                errors=validation.error_message if not validation.is_valid else None,
-            )
-
-        except AccordoError as e:
-            return CorrectnessResult(success=False, errors=f"Accordo error: {e}")
-        except Exception as e:
-            return CorrectnessResult(
-                success=False, errors=f"Accordo unexpected error: {e}"
-            )
+        return CorrectnessResult(
+            success=is_valid,
+            metrics=metrics,
+            errors=output.get("error_message") if not is_valid else None,
+        )
 
     def _load_module(self, file_path: str) -> ModuleType:
         """Load a Python module from file."""

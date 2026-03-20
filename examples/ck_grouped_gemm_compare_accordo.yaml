@@ -17,9 +17,6 @@ kernels:
     type: hip
     source_files:
       - "${CK_HOME}/example/15_grouped_gemm/grouped_gemm_xdl_bf16.cpp"
-    # compile_command:
-    #   - ["cmake", "-S", "${CK_HOME}", "-B", "${CK_HOME}/build", "-D", "CMAKE_PREFIX_PATH=/opt/rocm", "-D", "CMAKE_CXX_COMPILER=/opt/rocm/bin/hipcc", "-D", "CMAKE_BUILD_TYPE=RelWithDebInfo", "-D", "GPU_TARGETS=gfx950"]
-    #   - ["cmake", "--build", "${CK_HOME}/build", "--target", "example_grouped_gemm_xdl_bf16", "-j8"]
     working_dir: "${CK_HOME}/build"
     testcase_command: "bin/example_grouped_gemm_xdl_bf16"
 
@@ -27,20 +24,16 @@ kernels:
     type: hip
     source_files:
       - "${CK_HOME}/example/15_grouped_gemm/grouped_gemm_xdl_fp16.cpp"
-    # compile_command:
-    #   - ["cmake", "--build", "${CK_HOME}/build", "--target", "example_grouped_gemm_xdl_fp16", "-j8"]
     working_dir: "${CK_HOME}/build"
     testcase_command: "bin/example_grouped_gemm_xdl_fp16"
 
-# Override correctness backend to Accordo HSA-level validation
+# Override correctness backend to Accordo HSA-level validation.
+# timeout_seconds defaults from the task-level timeout.
+# working_directory defaults from the kernel's working_dir.
 correctness:
   backend: accordo
   accordo:
-    # Run: python -c "from accordo import list_available_kernels; print(*list_available_kernels('bin/example_grouped_gemm_xdl_bf16'), sep='\n')"
-    # to discover the exact kernel name from the binary.
     kernel_name: "DeviceGroupedGemm_Xdl_CShuffle"
     reference_binary: "bin/example_grouped_gemm_xdl_bf16"
     optimized_binary: "bin/example_grouped_gemm_xdl_fp16"
     tolerance: 1.0e-3
-    timeout_seconds: 60
-    working_directory: "${CK_HOME}/build"

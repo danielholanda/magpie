@@ -514,6 +514,8 @@ def run_analyze(args, config: Dict[str, Any]) -> int:
     perf_settings["rocprof_config"]["output_dir"] = perf_dir
     perf_settings["metrix_config"]["output_dir"] = perf_dir
 
+    corr_settings["workspace_path"] = str(ws_path)
+
     # Create scheduler
     scheduler_config = _get_scheduler_config(config, args)
     scheduler = Scheduler(scheduler_config)
@@ -621,6 +623,8 @@ def run_compare(args, config: Dict[str, Any]) -> int:
     perf_dir = str(ws_path / "performance")
     perf_settings["rocprof_config"]["output_dir"] = perf_dir
     perf_settings["metrix_config"]["output_dir"] = perf_dir
+
+    corr_settings["workspace_path"] = str(ws_path)
 
     # Create scheduler
     scheduler_config = _get_scheduler_config(config, args)

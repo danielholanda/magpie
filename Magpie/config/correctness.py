@@ -56,18 +56,22 @@ class AccordoConfig:
         optimized_binary: Command (or path) to the optimized binary.
         tolerance: Absolute tolerance for ``np.allclose`` comparison.
         timeout_seconds: Timeout per snapshot capture in seconds.
+                         *None* means inherit from the task-level timeout.
         kernel_args: Optional manual kernel args as ``[(name, type), ...]``.
                      Auto-extracted from the binary when *None*.
         working_directory: Working directory for binary execution.
+        workspace_path: Result workspace directory (set by the pipeline).
+                        The ``accordo`` CLI subprocess runs with this as cwd.
     """
 
     kernel_name: Optional[str] = None
     reference_binary: Optional[str] = None
     optimized_binary: Optional[str] = None
     tolerance: float = 1e-6
-    timeout_seconds: int = 30
+    timeout_seconds: Optional[int] = None
     kernel_args: Optional[List[Tuple[str, str]]] = None
     working_directory: Optional[str] = None
+    workspace_path: Optional[str] = None
 
 
 @dataclass
@@ -142,9 +146,10 @@ class CorrectnessConfig:
                 reference_binary=acc.get("reference_binary"),
                 optimized_binary=acc.get("optimized_binary"),
                 tolerance=acc.get("tolerance", 1e-6),
-                timeout_seconds=acc.get("timeout_seconds", 30),
+                timeout_seconds=acc.get("timeout_seconds"),
                 kernel_args=acc.get("kernel_args"),
                 working_directory=acc.get("working_directory"),
+                workspace_path=cfg.get("workspace_path"),
             )
 
         return cls(
