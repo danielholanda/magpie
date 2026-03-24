@@ -151,6 +151,7 @@ class Scheduler:
         rocprof_config: Optional[Dict[str, Any]] = None,
         ncu_config: Optional[Dict[str, Any]] = None,
         metrix_config: Optional[Dict[str, Any]] = None,
+        correctness_config: Optional[Dict[str, Any]] = None,
         baseline_index: int = 0,
         compare_config: Optional[Dict[str, Any]] = None,
         benchmark_config: Optional[Dict[str, Any]] = None,
@@ -187,6 +188,7 @@ class Scheduler:
             rocprof_config=rocprof_config or {},
             ncu_config=ncu_config or {},
             metrix_config=metrix_config or {},
+            correctness_config=correctness_config or {},
             baseline_index=baseline_index,
             compare_config=compare_config or {},
             benchmark_config=benchmark_config or {},
@@ -273,6 +275,7 @@ class Scheduler:
         rocprof_config: Optional[Dict[str, Any]] = None,
         ncu_config: Optional[Dict[str, Any]] = None,
         metrix_config: Optional[Dict[str, Any]] = None,
+        correctness_config: Optional[Dict[str, Any]] = None,
     ) -> TaskResult:
         """
         Convenience method to run analyze mode.
@@ -302,6 +305,7 @@ class Scheduler:
             rocprof_config=rocprof_config,
             ncu_config=ncu_config,
             metrix_config=metrix_config,
+            correctness_config=correctness_config,
         )
         return self.execute(task)
 
@@ -317,6 +321,7 @@ class Scheduler:
         rocprof_config: Optional[Dict[str, Any]] = None,
         ncu_config: Optional[Dict[str, Any]] = None,
         metrix_config: Optional[Dict[str, Any]] = None,
+        correctness_config: Optional[Dict[str, Any]] = None,
         compare_config: Optional[Dict[str, Any]] = None,
     ) -> TaskResult:
         """
@@ -349,6 +354,7 @@ class Scheduler:
             rocprof_config=rocprof_config,
             ncu_config=ncu_config,
             metrix_config=metrix_config,
+            correctness_config=correctness_config,
             compare_config=compare_config,
         )
         return self.execute(task)

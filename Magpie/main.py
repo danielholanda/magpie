@@ -71,17 +71,17 @@ def parse_kernel_type(type_str: str) -> KernelType:
 
 def load_kernel_config(
     kernel_config_path: Path,
-) -> tuple[List[KernelEvalConfig], Dict[str, Any]]:
+) -> tuple[List[KernelEvalConfig], Dict[str, Any], Dict[str, Any]]:
     """
     Load kernel configuration from YAML file.
 
-    The YAML may optionally contain a ``performance:`` section that
-    overrides the framework-level performance settings (e.g. backend,
-    metrix config).
+    The YAML may optionally contain ``performance:`` and ``correctness:``
+    sections that override the framework-level settings.
 
     Returns:
-        Tuple of (list of KernelEvalConfig, performance overrides dict).
-        The overrides dict is empty when no ``performance:`` section exists.
+        Tuple of (list of KernelEvalConfig, performance overrides dict,
+        correctness overrides dict).  Override dicts are empty when the
+        corresponding section is absent.
     """
     data = load_yaml(kernel_config_path)
     configs = []
@@ -100,9 +100,12 @@ def load_kernel_config(
                 configs.append(cfg)
 
     # Performance overrides (optional section in kernel config)
-    perf_overrides = data.get("performance", {})
+    perf_overrides = _expand_env_vars(data.get("performance", {}))
 
-    return configs, perf_overrides
+    # Correctness overrides (optional section in kernel config)
+    corr_overrides = _expand_env_vars(data.get("correctness", {}))
+
+    return configs, perf_overrides, corr_overrides
 
 
 def _parse_command_list(cmd_entry) -> Optional[List]:
@@ -218,6 +221,55 @@ def _get_compiling_config(config: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "enable_default_compile": compile_cfg.get("enable_default_compile", False),
     }
+
+
+def _get_correctness_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Get correctness configuration from framework config.
+
+    Args:
+        config: Framework config dict
+
+    Returns:
+        Dict with backend and accordo settings.
+    """
+    corr_cfg = config.get("correctness", {})
+    backend_str = corr_cfg.get("backend")
+
+    acc_cfg = corr_cfg.get("accordo", {})
+    accordo_settings = {
+        "tolerance": acc_cfg.get("tolerance", 1e-6),
+        "timeout_seconds": acc_cfg.get("timeout_seconds", 30),
+    }
+
+    result: Dict[str, Any] = {"accordo": accordo_settings}
+    if backend_str:
+        result["backend"] = backend_str
+
+    return result
+
+
+def _apply_correctness_overrides(
+    corr_settings: Dict[str, Any],
+    overrides: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Merge kernel-config-level ``correctness:`` overrides into *corr_settings*.
+
+    Supported override keys (all optional):
+      - ``backend``: ``"testcase"`` | ``"accordo"``
+      - ``accordo``: dict of Accordo-specific settings
+    """
+    settings = dict(corr_settings)
+
+    if "backend" in overrides:
+        settings["backend"] = overrides["backend"]
+
+    if "accordo" in overrides:
+        acc = dict(settings.get("accordo", {}))
+        acc.update(overrides["accordo"])
+        settings["accordo"] = acc
+
+    return settings
 
 
 def _get_performance_config(
@@ -399,10 +451,13 @@ def run_analyze(args, config: Dict[str, Any]) -> int:
     # Load kernel configs
     kernel_configs = []
     perf_overrides: Dict[str, Any] = {}
+    corr_overrides: Dict[str, Any] = {}
 
     if args.kernel_config:
         # Load from kernel config file
-        kernel_configs, perf_overrides = load_kernel_config(args.kernel_config)
+        kernel_configs, perf_overrides, corr_overrides = load_kernel_config(
+            args.kernel_config
+        )
         if not kernel_configs:
             logger.error(f"No kernels found in {args.kernel_config}")
             return 1
@@ -442,10 +497,13 @@ def run_analyze(args, config: Dict[str, Any]) -> int:
     # Get config from framework config
     compile_settings = _get_compiling_config(config)
     perf_settings = _get_performance_config(config, kernel_type)
+    corr_settings = _get_correctness_config(config)
 
-    # Apply per-config performance overrides (from kernel config YAML)
+    # Apply per-config overrides (from kernel config YAML)
     if perf_overrides:
         perf_settings = _apply_perf_overrides(perf_settings, perf_overrides, kernel_type)
+    if corr_overrides:
+        corr_settings = _apply_correctness_overrides(corr_settings, corr_overrides)
 
     # Create workspace before profiling so profiler writes directly there
     label = kernel_configs[0].kernel_id if kernel_configs else ""
@@ -455,6 +513,8 @@ def run_analyze(args, config: Dict[str, Any]) -> int:
     perf_dir = str(ws_path / "performance")
     perf_settings["rocprof_config"]["output_dir"] = perf_dir
     perf_settings["metrix_config"]["output_dir"] = perf_dir
+
+    corr_settings["workspace_path"] = str(ws_path)
 
     # Create scheduler
     scheduler_config = _get_scheduler_config(config, args)
@@ -475,6 +535,7 @@ def run_analyze(args, config: Dict[str, Any]) -> int:
             rocprof_config=perf_settings["rocprof_config"],
             ncu_config=perf_settings["ncu_config"],
             metrix_config=perf_settings["metrix_config"],
+            correctness_config=corr_settings,
         )
 
         # Print and save results
@@ -512,9 +573,12 @@ def run_compare(args, config: Dict[str, Any]) -> int:
     # Load kernel configs
     kernel_configs = []
     perf_overrides: Dict[str, Any] = {}
+    corr_overrides: Dict[str, Any] = {}
 
     if args.kernel_config:
-        kernel_configs, perf_overrides = load_kernel_config(args.kernel_config)
+        kernel_configs, perf_overrides, corr_overrides = load_kernel_config(
+            args.kernel_config
+        )
     elif args.kernels:
         kernel_type = parse_kernel_type(args.type)
 
@@ -543,11 +607,14 @@ def run_compare(args, config: Dict[str, Any]) -> int:
     # Get config from framework config
     compile_settings = _get_compiling_config(config)
     perf_settings = _get_performance_config(config, kernel_type)
+    corr_settings = _get_correctness_config(config)
     compare_settings = _get_compare_config(config)
 
-    # Apply per-config performance overrides (from kernel config YAML)
+    # Apply per-config overrides (from kernel config YAML)
     if perf_overrides:
         perf_settings = _apply_perf_overrides(perf_settings, perf_overrides, kernel_type)
+    if corr_overrides:
+        corr_settings = _apply_correctness_overrides(corr_settings, corr_overrides)
 
     # Create workspace before profiling so profiler writes directly there
     ws_path = _create_workspace(args.output_dir, "compare")
@@ -556,6 +623,8 @@ def run_compare(args, config: Dict[str, Any]) -> int:
     perf_dir = str(ws_path / "performance")
     perf_settings["rocprof_config"]["output_dir"] = perf_dir
     perf_settings["metrix_config"]["output_dir"] = perf_dir
+
+    corr_settings["workspace_path"] = str(ws_path)
 
     # Create scheduler
     scheduler_config = _get_scheduler_config(config, args)
@@ -577,6 +646,7 @@ def run_compare(args, config: Dict[str, Any]) -> int:
             rocprof_config=perf_settings["rocprof_config"],
             ncu_config=perf_settings["ncu_config"],
             metrix_config=perf_settings["metrix_config"],
+            correctness_config=corr_settings,
             compare_config=compare_settings,
         )
 

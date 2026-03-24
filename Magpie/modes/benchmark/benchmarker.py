@@ -319,6 +319,12 @@ class BenchmarkMode:
         inferencemax_path = self.config.inferencemax_path
         if os.path.exists(inferencemax_path):
             cmd.extend(["-v", f"{inferencemax_path}:/opt/InferenceMAX"])
+
+        # Model directory mount — if the model path is a local directory, mount it
+        # so the container can access the weights (e.g. /mnt/dcgpuval/datasets/...)
+        model_path = self.config.model
+        if model_path and os.path.isdir(model_path):
+            cmd.extend(["-v", f"{model_path}:{model_path}"])
         
         # Workspace mount — map directly to /workspace so all output
         # (server.log, results, torch_trace/) lands on the host automatically

@@ -71,6 +71,7 @@ class CompareConfig:
     rocprof_config: Dict[str, Any] = field(default_factory=dict)
     ncu_config: Dict[str, Any] = field(default_factory=dict)
     metrix_config: Dict[str, Any] = field(default_factory=dict)
+    correctness_config: Dict[str, Any] = field(default_factory=dict)
     # Winner selection strategy: "correctness_first" or "perf_score"
     winner_strategy: str = "perf_score"
     # Per-backend scoring weights
@@ -194,6 +195,9 @@ class CompareMode:
                 if self.config.metrix_config.get("backend") == "metrix":
                     explicit_backend = PerfBackend.METRIX
 
+            # Build correctness config
+            corr_cfg = self._build_correctness_config(corr_mode)
+
             # Build pipeline config
             pipeline_cfg = PipelineConfig(
                 mode=EvalMode.COMPARE,
@@ -202,7 +206,7 @@ class CompareMode:
                 compiling_config=CompilingConfig(
                     enable_default_compile=self.config.enable_default_compile,
                 ),
-                correctness_config=CorrectnessConfig(mode=corr_mode),
+                correctness_config=corr_cfg,
                 performance_config=PerformanceConfig(
                     enabled=self.config.check_performance,
                     backend=explicit_backend,
@@ -221,6 +225,14 @@ class CompareMode:
             results.append(state)
 
         return results
+
+    def _build_correctness_config(
+        self, corr_mode: CorrectnessMode
+    ) -> CorrectnessConfig:
+        """Build CorrectnessConfig from the correctness_config dict."""
+        return CorrectnessConfig.from_dict(
+            self.config.correctness_config, mode=corr_mode
+        )
 
     def _build_comparison(
         self, results: List[EvaluationState], kernel_configs: List[KernelEvalConfig]

@@ -18,8 +18,10 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import logging
 import random
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,16 +35,27 @@ from ..config import (
     PipelineConfig,
     KernelEvalConfig,
     CorrectnessConfig,
+    CorrectnessBackend,
+    AccordoConfig,
 )
 
-# Optional torch import
-try:
-    import torch
+# Torch is imported lazily to avoid initializing HIP/CUDA at module load time,
+# which would break Accordo's HSA interception (IPC memory handles).
+HAS_TORCH = False
+torch = None
 
-    HAS_TORCH = True
-except ImportError:
-    HAS_TORCH = False
-    torch = None
+
+def _ensure_torch():
+    global HAS_TORCH, torch
+    if torch is not None or HAS_TORCH:
+        return
+    try:
+        import torch as _torch
+
+        torch = _torch
+        HAS_TORCH = True
+    except ImportError:
+        HAS_TORCH = False
 
 if TYPE_CHECKING:
     pass
@@ -111,6 +124,9 @@ class Correctness:
             CorrectnessResult with pass/fail status
         """
         try:
+            if self.corr_cfg.backend == CorrectnessBackend.ACCORDO:
+                return self._run_accordo_mode(eval_state, kernel_cfg)
+
             mode = self.pipeline_cfg.mode
 
             if mode == EvalMode.ANALYZE:
@@ -229,6 +245,7 @@ class Correctness:
 
         Generate test inputs using get_inputs function and compare outputs.
         """
+        _ensure_torch()
         if not HAS_TORCH:
             return CorrectnessResult(
                 success=False, errors="PyTorch not available for comparison"
@@ -402,6 +419,162 @@ class Correctness:
             )
         except Exception as e:
             return CorrectnessResult(success=False, errors=str(e))
+
+    def _run_accordo_mode(
+        self, eval_state: Any, kernel_cfg: KernelEvalConfig
+    ) -> CorrectnessResult:
+        """
+        Run Accordo HSA-level correctness validation via the ``accordo`` CLI.
+
+        Invokes ``accordo validate`` as a subprocess so that HSA interception,
+        signal-based timeouts, and ``os.chdir`` are fully isolated from the
+        Magpie host process (important for Ray / multi-worker execution).
+        """
+        if not shutil.which("accordo"):
+            return CorrectnessResult(
+                success=False,
+                errors=(
+                    "'accordo' CLI not found on PATH. Install IntelliKit Accordo "
+                    "(pip install intellikit[accordo] or "
+                    "pip install -e /path/to/intellikit/accordo)."
+                ),
+            )
+
+        accordo_cfg: AccordoConfig = self.corr_cfg.accordo_config or AccordoConfig()
+
+        kernel_name = accordo_cfg.kernel_name
+        if not kernel_name:
+            return CorrectnessResult(
+                success=False,
+                errors="Accordo backend requires 'kernel_name' to be set in accordo config.",
+            )
+
+        ref_binary = accordo_cfg.reference_binary
+        opt_binary = accordo_cfg.optimized_binary
+        if not ref_binary or not opt_binary:
+            return CorrectnessResult(
+                success=False,
+                errors="Accordo backend requires both 'reference_binary' and "
+                "'optimized_binary' to be set in accordo config.",
+            )
+
+        tolerance = accordo_cfg.tolerance
+        perf_timeout = getattr(
+            self.pipeline_cfg.performance_config, "timeout_seconds", None
+        )
+        timeout = accordo_cfg.timeout_seconds or perf_timeout or 300
+
+        binary_working_dir = (
+            accordo_cfg.working_directory or kernel_cfg.working_dir or "."
+        )
+        binary_working_dir = str(Path(binary_working_dir).resolve())
+
+        workspace_dir = accordo_cfg.workspace_path or binary_working_dir
+
+        cmd = [
+            "accordo", "validate",
+            "--kernel-name", kernel_name,
+            "--ref-binary", ref_binary,
+            "--opt-binary", opt_binary,
+            "--tolerance", str(tolerance),
+            "--timeout", str(int(timeout)),
+            "--working-dir", binary_working_dir,
+            "--log-level", "INFO",
+        ]
+
+        if accordo_cfg.kernel_args:
+            args_str = ",".join(
+                f"{name}:{typ}" for name, typ in accordo_cfg.kernel_args
+            )
+            cmd.extend(["--kernel-args", args_str])
+
+        logger.info("Accordo CLI: %s (cwd=%s)", " ".join(cmd), workspace_dir)
+
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                cwd=workspace_dir,
+                timeout=int(timeout) * 2 + 60,
+            )
+        except subprocess.TimeoutExpired:
+            return CorrectnessResult(
+                success=False,
+                errors=f"Accordo CLI timed out after {int(timeout) * 2 + 60}s",
+            )
+        except FileNotFoundError:
+            return CorrectnessResult(
+                success=False,
+                errors="'accordo' CLI not found. Is it installed?",
+            )
+
+        if proc.returncode != 0:
+            stdout = proc.stdout.strip()
+            try:
+                err_data = json.loads(stdout)
+                error_msg = err_data.get("error", stdout)
+            except (json.JSONDecodeError, ValueError):
+                error_msg = stdout or proc.stderr.strip()
+            return CorrectnessResult(
+                success=False, errors=f"Accordo error: {error_msg}"
+            )
+
+        try:
+            raw = proc.stdout.strip()
+            json_start = raw.find("{")
+            json_end = raw.rfind("}") + 1
+            if json_start < 0 or json_end <= json_start:
+                raise ValueError("No JSON object found in output")
+            output = json.loads(raw[json_start:json_end])
+        except (json.JSONDecodeError, ValueError):
+            return CorrectnessResult(
+                success=False,
+                errors=f"Accordo CLI returned invalid JSON: {proc.stdout[:500]}",
+            )
+
+        is_valid = output.get("is_valid", False)
+        metrics = []
+
+        if is_valid:
+            metrics.append(
+                MetricResult(
+                    name="accordo_validation",
+                    success=True,
+                    value=float(output.get("num_arrays_validated", 0)),
+                )
+            )
+            for arr_name in output.get("matched_arrays", {}):
+                metrics.append(
+                    MetricResult(
+                        name=f"accordo_array_{arr_name}",
+                        success=True,
+                        threshold=tolerance,
+                    )
+                )
+        else:
+            metrics.append(
+                MetricResult(
+                    name="accordo_validation",
+                    success=False,
+                    value=float(output.get("num_mismatches", 0)),
+                )
+            )
+            for mismatch in output.get("mismatches", []):
+                metrics.append(
+                    MetricResult(
+                        name=f"accordo_mismatch_{mismatch.get('arg_name', '?')}",
+                        success=False,
+                        value=mismatch.get("max_difference"),
+                        threshold=tolerance,
+                    )
+                )
+
+        return CorrectnessResult(
+            success=is_valid,
+            metrics=metrics,
+            errors=output.get("error_message") if not is_valid else None,
+        )
 
     def _load_module(self, file_path: str) -> ModuleType:
         """Load a Python module from file."""

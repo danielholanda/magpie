@@ -14,7 +14,7 @@
 
 benchmark:
   framework: vllm
-  model: /shared_nfs/sina_workspace/gpt-oss-20b
+  model: /mnt/dcgpuval/datasets/openai/gpt-oss-20b
   precision: fp4
 
   envs:
