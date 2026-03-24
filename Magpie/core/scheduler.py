@@ -117,7 +117,7 @@ class Scheduler:
         if self.config.environment_type == EnvironmentType.RAY:
             from ..modes.benchmark.config import RayConfig
             extra_kwargs["ray_config"] = RayConfig(
-                cluster_address=self.config.ray_cluster_address or "http://localhost:8265",
+                cluster_address=self.config.ray_cluster_address or "auto",
                 shared_storage_path=self.config.ray_shared_storage_path or "/shared_nfs/magpie",
             )
         self._executor = create_executor(executor_config, **extra_kwargs)
@@ -624,7 +624,7 @@ class Scheduler:
     def run_benchmark_ray(
         self,
         benchmark_config: Dict[str, Any],
-        ray_cluster_address: str = "http://localhost:8265",
+        ray_cluster_address: str = "auto",
         ray_shared_storage_path: str = "/shared_nfs/magpie",
         gpu_arch: Optional[str] = None,
         timeout_seconds: float = 3600.0,
@@ -633,7 +633,7 @@ class Scheduler:
         Submit a benchmark to a remote Ray cluster.
 
         Unlike run_benchmark() which blocks, this submits asynchronously
-        and returns a TaskResult whose metadata contains the ray_job_id.
+        and returns a TaskResult whose metadata contains the task_id.
 
         Args:
             benchmark_config: Benchmark configuration dict
@@ -643,7 +643,7 @@ class Scheduler:
             timeout_seconds: Timeout
 
         Returns:
-            TaskResult with ray_job_id in metadata
+            TaskResult with task_id in metadata
         """
         benchmark_config["run_mode"] = "ray"
         benchmark_config["ray_config"] = {

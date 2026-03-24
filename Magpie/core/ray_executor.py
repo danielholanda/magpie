@@ -4,11 +4,11 @@
 # See LICENSE for license information.
 ###############################################################################
 """
-Ray Job executor for remote benchmark / analyze / compare execution.
+Ray executor for remote benchmark / analyze / compare execution.
 
-Submits tasks as Ray Jobs via the Ray Job Submission API.  Results are
-exchanged through shared NFS storage; the executor never requires a local
-GPU.
+Dispatches tasks to GPU workers via ``ray.init()`` + ``@ray.remote()``.
+Only requires the Ray GCS (port 6379) or Ray Client (port 10001) —
+**no Dashboard / Job Submission API needed**.
 """
 
 import json
@@ -23,91 +23,94 @@ from .job_store import JobStore, JobRecord
 
 logger = logging.getLogger(__name__)
 
-# Ray job status constants (mirrors ray.job_submission.JobStatus values)
-_RAY_TERMINAL_STATUSES = {"SUCCEEDED", "FAILED", "STOPPED"}
-
 
 class RayJobExecutor(BaseExecutor):
     """
-    Executor that submits tasks to a remote Ray cluster via the
-    Ray Job Submission REST API.
+    Executor that dispatches tasks to a Ray cluster via
+    ``ray.init()`` and ``@ray.remote(num_gpus=...)``.
+
+    Only the core Ray GCS / Ray Client is required (works with
+    ``--minimal`` KubeRay clusters that have no Dashboard).
 
     Prerequisites:
-        * ``ray[default]`` must be installed (``pip install ray[default]``)
-        * A Ray cluster must be reachable at the configured address
-        * All nodes (MCP server + Ray workers) must share an NFS mount
+        * ``ray`` must be installed (``pip install ray``)
+        * The Ray cluster must be reachable at the configured address
     """
 
     def __init__(self, config: ExecutorConfig, ray_config: Any):
-        """
-        Args:
-            config: Base executor configuration.
-            ray_config: A ``RayConfig`` instance from
-                ``Magpie.modes.benchmark.config``.
-        """
         super().__init__(config)
         self._ray_config = ray_config
-        self._client: Any = None  # ray.job_submission.JobSubmissionClient
+        self._ray_inited = False
         self._job_store: Optional[JobStore] = None
-        # task_id -> ray_job_id mapping kept in memory for the current session
-        self._job_map: Dict[str, str] = {}
+        # task_id -> ray.ObjectRef
+        self._obj_refs: Dict[str, Any] = {}
+        # task_id -> cached result (filled after ray.get)
+        self._results_cache: Dict[str, dict] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     def start(self) -> bool:
-        """Connect to the Ray cluster and initialise the job store."""
+        """Connect to the Ray cluster via ``ray.init()``."""
         if self._is_running:
             logger.warning("RayJobExecutor is already running")
             return True
 
         try:
-            from ray.job_submission import JobSubmissionClient
+            import ray
         except ImportError:
-            logger.error(
-                "ray[default] is not installed.  "
-                "Run: pip install 'ray[default]'"
-            )
+            logger.error("ray is not installed.  Run: pip install ray")
             return False
 
+        addr = self._ray_config.cluster_address
         try:
-            self._client = JobSubmissionClient(self._ray_config.cluster_address)
-            logger.info(
-                f"Connected to Ray cluster at {self._ray_config.cluster_address}"
-            )
+            if ray.is_initialized():
+                logger.info("Ray is already initialised, reusing context")
+            else:
+                ray.init(address=addr, logging_level=logging.WARNING)
+            logger.info(f"Connected to Ray cluster (address={addr})")
         except Exception as e:
-            logger.error(f"Failed to connect to Ray cluster: {e}")
+            logger.error(f"ray.init(address={addr!r}) failed: {e}")
             return False
 
-        try:
-            self._job_store = JobStore(self._ray_config.job_store_path)
-        except Exception as e:
-            logger.error(f"Failed to initialise job store: {e}")
-            return False
-
+        self._ray_inited = True
         self._is_running = True
-        logger.info("RayJobExecutor started")
+        logger.info(
+            "RayJobExecutor started (install_magpie=%s)",
+            self._ray_config.install_magpie,
+        )
         return True
 
     def stop(self) -> None:
-        """Disconnect and release resources."""
+        """Release resources and disconnect from Ray."""
         if self._job_store:
             self._job_store.close()
             self._job_store = None
-        self._client = None
-        self._is_running = False
+        self._obj_refs.clear()
+        self._results_cache.clear()
         self._pending_tasks.clear()
-        self._job_map.clear()
+        self._is_running = False
+
+        if self._ray_inited:
+            self._ray_inited = False
+            try:
+                import ray
+                if ray.is_initialized():
+                    ray.shutdown()
+            except Exception as e:
+                logger.debug(f"ray.shutdown() error (non-fatal): {e}")
+
         logger.info("RayJobExecutor stopped")
 
     # ------------------------------------------------------------------
-    # Submit (async – returns immediately)
+    # Submit (async — returns immediately)
     # ------------------------------------------------------------------
 
     def submit(self, task: Task) -> str:
-        """
-        Submit a task as a Ray job.  Returns the Magpie task ID immediately.
+        """Dispatch a task to a GPU worker via ``@ray.remote``.
+
+        Returns the Magpie task ID immediately.
         """
         if not self._is_running:
             raise RuntimeError("RayJobExecutor is not running")
@@ -115,20 +118,18 @@ class RayJobExecutor(BaseExecutor):
         task.status = TaskStatus.RUNNING
         self._pending_tasks[task.task_id] = task
 
-        ray_job_id = self._submit_ray_job(task)
-        self._job_map[task.task_id] = ray_job_id
+        obj_ref = self._submit_ray_task(task)
+        self._obj_refs[task.task_id] = obj_ref
 
-        logger.info(
-            f"Task {task.task_id} submitted as Ray job {ray_job_id}"
-        )
+        logger.info(f"Task {task.task_id} dispatched to Ray worker")
         return task.task_id
 
     # ------------------------------------------------------------------
-    # Execute (synchronous – polls until done)
+    # Execute (synchronous — blocks until done)
     # ------------------------------------------------------------------
 
     def execute(self, task: Task) -> TaskResult:
-        """Submit and block until the Ray job completes."""
+        """Submit and block until the Ray task completes."""
         self.submit(task)
         return self.wait_for_task(
             task.task_id, timeout=self.config.timeout_seconds
@@ -141,60 +142,45 @@ class RayJobExecutor(BaseExecutor):
     def wait_for_task(
         self, task_id: str, timeout: Optional[float] = None
     ) -> TaskResult:
-        """Poll the Ray job until it reaches a terminal state."""
-        if task_id not in self._job_map:
+        """Block until the remote task finishes or *timeout* elapses."""
+        import ray
+
+        if task_id not in self._obj_refs:
             raise ValueError(f"Task {task_id} not found")
 
-        ray_job_id = self._job_map[task_id]
-        deadline = time.time() + timeout if timeout else None
-        poll_interval = 5.0
+        obj_ref = self._obj_refs[task_id]
 
-        while True:
-            status_str = self._get_ray_status(ray_job_id)
-            if self._job_store:
-                self._job_store.update_status(ray_job_id, status_str)
-
-            if status_str in _RAY_TERMINAL_STATUSES:
-                break
-
-            if deadline and time.time() >= deadline:
-                logger.warning(f"Timeout waiting for Ray job {ray_job_id}")
+        try:
+            ready, _ = ray.wait(
+                [obj_ref], num_returns=1, timeout=timeout
+            )
+            if not ready:
+                logger.warning(f"Timeout waiting for task {task_id}")
                 return TaskResult(
                     task_id=task_id,
                     status=TaskStatus.FAILED,
-                    errors=[f"Timeout after {timeout}s waiting for Ray job {ray_job_id}"],
+                    errors=[f"Timeout after {timeout}s"],
                 )
 
-            time.sleep(poll_interval)
-            poll_interval = min(poll_interval * 1.5, 30.0)
+            result_dict: dict = ray.get(obj_ref)
+            self._results_cache[task_id] = result_dict
 
-        # Map Ray status to Magpie TaskStatus
-        if status_str == "SUCCEEDED":
             magpie_status = TaskStatus.COMPLETED
-        elif status_str == "STOPPED":
+            errors: List[str] = []
+            if result_dict.get("status") == "failed" or "error" in result_dict:
+                magpie_status = TaskStatus.FAILED
+                if result_dict.get("error"):
+                    errors.append(result_dict["error"])
+
+        except ray.exceptions.TaskCancelledError:
             magpie_status = TaskStatus.CANCELLED
-        else:
+            result_dict = {}
+            errors = ["Task was cancelled"]
+        except Exception as e:
+            logger.exception(f"ray.get failed for task {task_id}: {e}")
             magpie_status = TaskStatus.FAILED
-
-        # Read result from shared storage
-        record = self._job_store.get(ray_job_id) if self._job_store else None
-        results = None
-        errors: List[str] = []
-
-        if record and record.result_path:
-            result_path = Path(record.result_path)
-            if result_path.exists():
-                try:
-                    results = json.loads(result_path.read_text())
-                except Exception as e:
-                    errors.append(f"Failed to read result: {e}")
-            else:
-                errors.append(f"Result file not found: {record.result_path}")
-
-        if magpie_status == TaskStatus.FAILED:
-            logs = self.get_job_logs(ray_job_id)
-            if logs:
-                errors.append(f"Ray job logs (last 2000 chars): {logs[-2000:]}")
+            result_dict = {}
+            errors = [str(e)]
 
         if task_id in self._pending_tasks:
             self._pending_tasks[task_id].status = magpie_status
@@ -202,86 +188,105 @@ class RayJobExecutor(BaseExecutor):
         return TaskResult(
             task_id=task_id,
             status=magpie_status,
-            results=results,
+            results=result_dict if result_dict else None,
             errors=errors,
-            metadata={"ray_job_id": ray_job_id},
+            execution_time=result_dict.get("execution_time", 0.0) if result_dict else 0.0,
+            metadata={"task_id": task_id},
         )
 
     def wait_all(self, timeout: Optional[float] = None) -> List[TaskResult]:
         """Wait for all submitted tasks."""
         results = []
-        for task_id in list(self._job_map.keys()):
-            result = self.wait_for_task(task_id, timeout)
-            results.append(result)
+        for task_id in list(self._obj_refs.keys()):
+            results.append(self.wait_for_task(task_id, timeout))
         return results
 
     # ------------------------------------------------------------------
     # Job management helpers (used by MCP tools)
     # ------------------------------------------------------------------
 
-    def get_ray_job_id(self, task_id: str) -> Optional[str]:
-        """Resolve a Magpie task ID to a Ray job ID."""
-        return self._job_map.get(task_id)
+    def get_task_status_ray(self, task_id: str) -> str:
+        """Check if a remote task is still running."""
+        import ray
 
-    def get_job_status(self, ray_job_id: str) -> str:
-        """Get the current status string of a Ray job."""
-        return self._get_ray_status(ray_job_id)
+        if task_id in self._results_cache:
+            return "SUCCEEDED"
 
-    def get_job_logs(self, ray_job_id: str) -> str:
-        """Fetch logs from a Ray job."""
-        if not self._client:
-            return ""
-        try:
-            return self._client.get_job_logs(ray_job_id)
-        except Exception as e:
-            logger.warning(f"Failed to get logs for {ray_job_id}: {e}")
-            return f"[error fetching logs: {e}]"
+        obj_ref = self._obj_refs.get(task_id)
+        if obj_ref is None:
+            return "UNKNOWN"
 
-    def cancel_job(self, ray_job_id: str) -> bool:
-        """Cancel / stop a running Ray job."""
-        if not self._client:
+        ready, _ = ray.wait([obj_ref], num_returns=1, timeout=0)
+        if ready:
+            try:
+                result = ray.get(obj_ref)
+                self._results_cache[task_id] = result
+                if result.get("status") == "failed" or "error" in result:
+                    return "FAILED"
+                return "SUCCEEDED"
+            except Exception:
+                return "FAILED"
+        return "RUNNING"
+
+    def get_task_result(self, task_id: str) -> Optional[dict]:
+        """Return the cached result dict for a completed task."""
+        return self._results_cache.get(task_id)
+
+    def cancel_task(self, task_id: str) -> bool:
+        """Cancel a running Ray task."""
+        import ray
+
+        obj_ref = self._obj_refs.get(task_id)
+        if obj_ref is None:
             return False
         try:
-            self._client.stop_job(ray_job_id)
-            if self._job_store:
-                self._job_store.update_status(ray_job_id, "STOPPED")
-            logger.info(f"Cancelled Ray job {ray_job_id}")
+            ray.cancel(obj_ref, force=True)
+            logger.info(f"Cancelled task {task_id}")
             return True
         except Exception as e:
-            logger.error(f"Failed to cancel Ray job {ray_job_id}: {e}")
+            logger.error(f"Failed to cancel task {task_id}: {e}")
             return False
+
+    def list_tasks(self) -> Dict[str, str]:
+        """Return a dict of ``{task_id: status}`` for all tracked tasks."""
+        out: Dict[str, str] = {}
+        for tid in self._obj_refs:
+            out[tid] = self.get_task_status_ray(tid)
+        return out
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _submit_ray_job(self, task: Task) -> str:
-        """Build the entrypoint, write config to NFS, and submit to Ray."""
+    @staticmethod
+    def _find_magpie_root() -> str:
+        """Auto-detect the Magpie project root."""
+        pkg_dir = Path(__file__).resolve().parent.parent  # Magpie/core -> Magpie
+        for candidate in [pkg_dir.parent, pkg_dir]:
+            if (candidate / "pyproject.toml").exists() or (candidate / "setup.py").exists():
+                return str(candidate)
+        return str(pkg_dir.parent)
+
+    @staticmethod
+    def _collect_pip_packages(rc: Any) -> List[str]:
+        """Build the full pip package list for ``runtime_env``."""
+        pkgs: List[str] = list(rc.pip_packages)
+        if rc.install_magpie:
+            magpie_root = rc.magpie_install_path or RayJobExecutor._find_magpie_root()
+            req_file = Path(magpie_root) / "requirements.txt"
+            if req_file.exists():
+                with open(req_file) as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#"):
+                            pkgs.append(line)
+            pkgs.append(magpie_root)
+        return pkgs
+
+    def _build_runtime_env(self) -> Dict[str, Any]:
+        """Construct the ``runtime_env`` dict for the remote function."""
         rc = self._ray_config
-        job_dir = Path(rc.results_dir) / task.task_id
-        job_dir.mkdir(parents=True, exist_ok=True)
 
-        config_path = job_dir / "config.json"
-        result_path = job_dir / "result.json"
-
-        # Serialise the full task config to shared storage
-        job_payload = {
-            "task_id": task.task_id,
-            "mode_type": task.mode_config.mode_type.value,
-            "mode_config": task.to_dict()["mode_config"],
-            "ray_config": rc.to_dict(),
-        }
-        config_path.write_text(json.dumps(job_payload, indent=2))
-
-        # Build the entrypoint command
-        entrypoint = (
-            f"python -m Magpie.remote.entrypoint "
-            f"--config {config_path} "
-            f"--result-path {result_path}"
-        )
-
-        # Build runtime_env
-        runtime_env: Dict[str, Any] = {}
         env_vars: Dict[str, str] = {
             "HF_HOME": rc.hf_cache_dir,
             "TRANSFORMERS_CACHE": f"{rc.hf_cache_dir}/hub",
@@ -290,51 +295,77 @@ class RayJobExecutor(BaseExecutor):
             env_vars["RAY_ADDRESS"] = "auto"
             env_vars["MAGPIE_TOTAL_GPUS"] = str(rc.total_num_gpus)
         env_vars.update(rc.env_vars)
-        runtime_env["env_vars"] = env_vars
 
-        if rc.pip_packages:
-            runtime_env["pip"] = rc.pip_packages
+        runtime_env: Dict[str, Any] = {"env_vars": env_vars}
 
-        # Submit via Ray Job Submission API
-        submit_kwargs: Dict[str, Any] = {
-            "entrypoint": entrypoint,
-            "runtime_env": runtime_env,
-            "metadata": {
-                "magpie_task_id": task.task_id,
-                "mode_type": task.mode_config.mode_type.value,
-                **rc.metadata,
-            },
+        pip_pkgs = self._collect_pip_packages(rc)
+        if pip_pkgs:
+            runtime_env["pip"] = pip_pkgs
+
+        return runtime_env
+
+    @staticmethod
+    def _find_gpu_node() -> Optional[str]:
+        """Return the Ray node ID of a GPU-equipped **worker** node.
+
+        Prefers non-head nodes so that heavy benchmark workloads do not
+        destabilise the cluster head.  Falls back to the head node if no
+        dedicated GPU worker is available.
+        """
+        import ray
+        head_gpu_node: Optional[str] = None
+        for node in ray.nodes():
+            if not node.get("Alive"):
+                continue
+            if node.get("Resources", {}).get("GPU", 0) <= 0:
+                continue
+            if "node:__internal_head__" in node.get("Resources", {}):
+                head_gpu_node = node["NodeID"]
+            else:
+                return node["NodeID"]
+        return head_gpu_node
+
+    def _submit_ray_task(self, task: Task) -> Any:
+        """Build a payload, wrap it in a ``@ray.remote`` call, and dispatch.
+
+        The outer task claims **no GPUs** (``num_gpus=0``) so that
+        frameworks like vLLM can allocate GPU resources internally via
+        Ray for tensor parallelism.  A ``NodeAffinitySchedulingStrategy``
+        ensures the task lands on a node that actually has GPUs.
+        """
+        import ray
+        from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
+        from Magpie.remote.tasks import run_task
+
+        rc = self._ray_config
+
+        job_payload = {
+            "task_id": task.task_id,
+            "mode_type": task.mode_config.mode_type.value,
+            "mode_config": task.to_dict()["mode_config"],
+            "ray_config": rc.to_dict(),
         }
-        if rc.entrypoint_num_gpus > 0:
-            submit_kwargs["entrypoint_num_gpus"] = rc.entrypoint_num_gpus
-        if rc.entrypoint_num_cpus > 0:
-            submit_kwargs["entrypoint_num_cpus"] = rc.entrypoint_num_cpus
 
-        ray_job_id = self._client.submit_job(**submit_kwargs)
+        runtime_env = self._build_runtime_env()
 
-        # Persist the record
-        if self._job_store:
-            self._job_store.add(JobRecord(
-                ray_job_id=ray_job_id,
-                magpie_task_id=task.task_id,
-                mode_type=task.mode_config.mode_type.value,
-                ray_cluster=rc.cluster_address,
-                config_path=str(config_path),
-                result_path=str(result_path),
-                workspace_dir=str(job_dir),
-                status="PENDING",
-                metadata=submit_kwargs.get("metadata", {}),
-            ))
+        gpu_node_id = self._find_gpu_node()
+        if gpu_node_id is None:
+            raise RuntimeError("No GPU node found in the Ray cluster")
 
-        return ray_job_id
+        remote_fn = ray.remote(
+            num_gpus=0,
+            num_cpus=rc.entrypoint_num_cpus,
+            runtime_env=runtime_env,
+            scheduling_strategy=NodeAffinitySchedulingStrategy(
+                node_id=gpu_node_id,
+                soft=True,
+            ),
+        )(run_task)
 
-    def _get_ray_status(self, ray_job_id: str) -> str:
-        """Query the Ray cluster for job status."""
-        if not self._client:
-            return "UNKNOWN"
-        try:
-            status = self._client.get_job_status(ray_job_id)
-            return str(status.value) if hasattr(status, "value") else str(status)
-        except Exception as e:
-            logger.warning(f"Failed to get status for {ray_job_id}: {e}")
-            return "UNKNOWN"
+        obj_ref = remote_fn.remote(job_payload)
+        logger.info(
+            f"Dispatched task {task.task_id} to GPU node {gpu_node_id[:12]}... "
+            f"(num_gpus=0 [managed by framework], "
+            f"num_cpus={rc.entrypoint_num_cpus})"
+        )
+        return obj_ref

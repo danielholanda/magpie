@@ -265,23 +265,32 @@ class RayConfig:
     """
     Configuration for Ray remote execution.
 
+    Tasks are dispatched to GPU workers via ``ray.init()`` +
+    ``@ray.remote(num_gpus=...)``.  Only the Ray GCS (port 6379) or
+    Ray Client (port 10001) is required — **no Dashboard needed**.
+
     Attributes:
-        cluster_address: Ray head node address (Job Submission API endpoint)
-        shared_storage_path: NFS path mounted on all nodes (MCP server + Ray workers)
-        entrypoint_num_gpus: GPU resources requested for the entrypoint process
-        entrypoint_num_cpus: CPU resources requested for the entrypoint process
-        multi_node: Whether the benchmark requires multiple nodes
-        total_num_gpus: Total GPUs needed across all nodes (for multi-node)
-        num_nodes: Number of nodes required (for multi-node)
-        gpus_per_node: GPUs per node (for multi-node resource calculation)
-        pip_packages: Extra pip packages to install in the Ray runtime environment
-        env_vars: Extra environment variables for the Ray job
-        metadata: Metadata tags attached to the Ray job
+        cluster_address: How to connect to the Ray cluster.
+            ``"auto"`` — on the head node (connects via local GCS).
+            ``"ray://<host>:10001"`` — from a remote machine via Ray Client.
+        shared_storage_path: NFS path on **worker** nodes for HF model
+            cache and InferenceMAX.
+        entrypoint_num_gpus: GPU resources requested per task.
+        entrypoint_num_cpus: CPU resources requested per task.
+        multi_node: Whether the benchmark requires multiple nodes.
+        total_num_gpus: Total GPUs needed across all nodes (multi-node).
+        num_nodes: Number of nodes required (multi-node).
+        gpus_per_node: GPUs per node (multi-node resource calculation).
+        pip_packages: Extra pip packages for the Ray ``runtime_env``.
+        env_vars: Extra environment variables for the Ray job.
+        metadata: Metadata tags attached to the Ray job.
+        install_magpie: Auto-install Magpie + requirements on workers.
+        magpie_install_path: Explicit Magpie project root for pip install.
     """
-    cluster_address: str = "http://localhost:8265"
+    cluster_address: str = "auto"
     shared_storage_path: str = "/shared_nfs/magpie"
-    entrypoint_num_gpus: int = 0
-    entrypoint_num_cpus: int = 4
+    entrypoint_num_gpus: int = 1
+    entrypoint_num_cpus: int = 16
     multi_node: bool = False
     total_num_gpus: int = 8
     num_nodes: int = 1
@@ -289,6 +298,8 @@ class RayConfig:
     pip_packages: List[str] = field(default_factory=list)
     env_vars: Dict[str, str] = field(default_factory=dict)
     metadata: Dict[str, str] = field(default_factory=dict)
+    install_magpie: bool = True
+    magpie_install_path: Optional[str] = None
 
     @property
     def results_dir(self) -> str:
@@ -305,11 +316,6 @@ class RayConfig:
         """InferenceMAX installation on the shared storage."""
         return f"{self.shared_storage_path}/InferenceMAX"
 
-    @property
-    def job_store_path(self) -> str:
-        """SQLite job store path on the shared storage."""
-        return f"{self.shared_storage_path}/.magpie_jobs.db"
-
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
@@ -324,13 +330,15 @@ class RayConfig:
             "pip_packages": self.pip_packages,
             "env_vars": self.env_vars,
             "metadata": self.metadata,
+            "install_magpie": self.install_magpie,
+            "magpie_install_path": self.magpie_install_path,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "RayConfig":
         """Create from dictionary."""
         return cls(
-            cluster_address=data.get("cluster_address", "http://localhost:8265"),
+            cluster_address=data.get("cluster_address", "auto"),
             shared_storage_path=data.get("shared_storage_path", "/shared_nfs/magpie"),
             entrypoint_num_gpus=data.get("entrypoint_num_gpus", 0),
             entrypoint_num_cpus=data.get("entrypoint_num_cpus", 4),
@@ -341,6 +349,8 @@ class RayConfig:
             pip_packages=data.get("pip_packages", []),
             env_vars=data.get("env_vars", {}),
             metadata=data.get("metadata", {}),
+            install_magpie=data.get("install_magpie", True),
+            magpie_install_path=data.get("magpie_install_path"),
         )
 
 

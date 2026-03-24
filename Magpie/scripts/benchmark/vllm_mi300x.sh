@@ -8,6 +8,7 @@
 # Magpie Generic vLLM Benchmark Script for MI300X
 
 source "$(dirname "$0")/benchmark_lib.sh"
+source "$(dirname "$0")/server_cleanup.sh"
 
 check_env_vars \
     MODEL \
@@ -56,7 +57,7 @@ if [[ "${PROFILE:-}" == "1" ]]; then
 fi
 
 set -x
-vllm serve $MODEL --port $PORT \
+setsid vllm serve $MODEL --port $PORT \
   --tensor-parallel-size=$TP \
   --gpu-memory-utilization 0.95 \
   --max-model-len $MAX_MODEL_LEN \
@@ -65,6 +66,7 @@ vllm serve $MODEL --port $PORT \
   $EXTRA_VLLM_ARGS > $SERVER_LOG 2>&1 &
 
 SERVER_PID=$!
+trap 'magpie_stop_benchmark_server_stack "$SERVER_PID"' EXIT INT TERM
 
 # Wait for server to be ready
 wait_for_server_ready --port "$PORT" --server-log "$SERVER_LOG" --server-pid "$SERVER_PID"

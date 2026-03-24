@@ -8,10 +8,13 @@
 Entry point for running Magpie MCP server as a module.
 
 Usage:
-    python -m Magpie.mcp                          # stdio (for MCP clients)
-    python -m Magpie.mcp --transport sse           # SSE over HTTP
-    python -m Magpie.mcp --transport streamable-http
-    python -m Magpie.mcp --transport sse --host 0.0.0.0 --port 8000
+    python -m Magpie.mcp                              # stdio (for MCP clients)
+    python -m Magpie.mcp --transport streamable-http   # HTTP (for remote servers)
+    python -m Magpie.mcp --transport sse               # SSE over HTTP
+
+Environment variables:
+    MAGPIE_HOST  - Bind host (default: 0.0.0.0)
+    MAGPIE_PORT  - Bind port (default: 8000)
 """
 
 import argparse
@@ -26,14 +29,6 @@ if __name__ == "__main__":
         default="stdio",
         help="Transport protocol (default: stdio)",
     )
-    parser.add_argument("--host", type=str, help="Bind host (default: 127.0.0.1)")
-    parser.add_argument("--port", type=int, help="Bind port (default: 8000)")
     args = parser.parse_args()
-
-    if args.host:
-        mcp.settings.host = args.host
-        mcp.settings.transport_security = None
-    if args.port:
-        mcp.settings.port = args.port
 
     mcp.run(transport=args.transport)

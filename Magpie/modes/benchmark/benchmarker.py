@@ -21,7 +21,7 @@ from .config import BenchmarkConfig
 from .image_selector import ImageSelector
 from .inferencemax import ensure_inferencemax_available
 from .workspace import WorkspaceManager
-from .result import BenchmarkResult, ResultParser
+from .result import BenchmarkResult, LatencyMetrics, ResultParser, ThroughputMetrics
 from .tracelens import TraceLensAnalyzer
 
 from ...utils.gpu import detect_gpu, GPUVendor
@@ -819,9 +819,9 @@ class BenchmarkMode:
         """
         Submit benchmark to a remote Ray cluster.
 
-        Writes the config to shared NFS and uses the RayJobExecutor to submit.
-        Returns a BenchmarkResult whose ``metadata`` contains the ``ray_job_id``
-        for later status polling.
+        Dispatches the benchmark to a Ray GPU worker via ``ray.remote()``
+        and blocks until the task completes.  Returns a BenchmarkResult
+        with the full results from the worker.
         """
         from ...core.ray_executor import RayJobExecutor
         from ...core.executor import ExecutorConfig, ExecutorType
@@ -861,31 +861,135 @@ class BenchmarkMode:
                 task_id=self._task_id,
             )
 
-            ray_job_id = executor._submit_ray_job(task)
+            logger.info(f"Dispatching benchmark to Ray GPU worker (task={self._task_id})...")
+            task_result = executor.execute(task)
 
-            result.success = True
             result.framework = self.config.framework
             result.model = self.config.model
-            result.workspace_dir = str(
-                Path(rc.results_dir) / self._task_id
-            )
-            result.metadata = {
-                "ray_job_id": ray_job_id,
-                "ray_cluster": rc.cluster_address,
-                "status": "PENDING",
-                "message": (
-                    "Benchmark submitted to Ray cluster. "
-                    "Use ray_job_status / ray_job_result tools to track progress."
-                ),
-            }
-            logger.info(f"Benchmark submitted as Ray job {ray_job_id}")
+            result.execution_time = task_result.execution_time
+
+            if task_result.status.value == "completed" and task_result.results:
+                self._populate_result_from_ray(result, task_result.results, rc)
+            else:
+                nfs_result = self._try_recover_from_nfs(rc)
+                if nfs_result:
+                    logger.info("Recovered benchmark result from NFS after Ray failure")
+                    return nfs_result
+                result.success = False
+                result.errors = task_result.errors or ["Ray task failed"]
+                result.metadata = {"task_id": self._task_id}
+
+            executor.stop()
+            logger.info(f"Ray benchmark task {self._task_id} finished: {task_result.status.value}")
             return result
 
         except Exception as e:
+            nfs_result = self._try_recover_from_nfs(rc)
+            if nfs_result:
+                logger.info("Recovered benchmark result from NFS after exception")
+                return nfs_result
             result.success = False
             result.errors.append(f"Ray submission failed: {e}")
             logger.exception(f"Ray benchmark submission failed: {e}")
             return result
+
+    def _populate_result_from_ray(
+        self, result: BenchmarkResult, ray_result: dict, rc
+    ) -> None:
+        """Fill *result* from the dict returned by the Ray worker."""
+        result.success = True
+        result.workspace_dir = ray_result.get("workspace_dir", "")
+
+        tp = ray_result.get("throughput")
+        if isinstance(tp, dict):
+            result.throughput = ThroughputMetrics(**{
+                k: tp[k] for k in ThroughputMetrics.__dataclass_fields__
+                if k in tp
+            })
+        else:
+            result.throughput = tp
+
+        lp = ray_result.get("latency")
+        if isinstance(lp, dict):
+            flat: dict = {}
+            for group in ("ttft", "tpot", "itl", "e2el"):
+                sub = lp.get(group, {})
+                if isinstance(sub, dict):
+                    flat[f"{group}_mean"] = sub.get("mean_ms", 0.0)
+                    flat[f"{group}_median"] = sub.get("median_ms", 0.0)
+                    flat[f"{group}_p99"] = sub.get("p99_ms", 0.0)
+                    flat[f"{group}_std"] = sub.get("std_ms", 0.0)
+                else:
+                    flat[f"{group}_mean"] = lp.get(f"{group}_mean", 0.0)
+                    flat[f"{group}_median"] = lp.get(f"{group}_median", 0.0)
+                    flat[f"{group}_p99"] = lp.get(f"{group}_p99", 0.0)
+                    flat[f"{group}_std"] = lp.get(f"{group}_std", 0.0)
+            result.latency = LatencyMetrics(**flat)
+        else:
+            result.latency = lp
+
+        result.kernel_summary = ray_result.get("kernel_summary", [])
+        result.top_bottlenecks = ray_result.get("top_bottlenecks", [])
+        result.gap_analysis = ray_result.get("gap_analysis")
+        result.tracelens_analysis = ray_result.get("tracelens_analysis")
+        result.errors = ray_result.get("errors", [])
+        result.metadata = {
+            "task_id": self._task_id,
+            "ray_cluster": rc.cluster_address,
+        }
+
+    def _try_recover_from_nfs(self, rc) -> Optional[BenchmarkResult]:
+        """Try to read benchmark results directly from NFS.
+
+        When the Ray head node restarts mid-benchmark, ``ray.get()``
+        fails but the worker may still complete.  This polls the NFS
+        results directory for the ``inferencemax_result.json`` file that
+        the worker writes, allowing recovery without a working Ray
+        connection.
+        """
+        import glob as globmod
+
+        shared = rc.shared_storage_path if rc else "/shared_nfs/magpie"
+        results_base = Path(shared) / "results" / self._task_id
+
+        if not results_base.exists():
+            return None
+
+        logger.info(
+            f"Ray connection lost. Polling NFS for results at {results_base} "
+            f"(timeout={self.config.timeout_seconds}s)..."
+        )
+
+        deadline = time.time() + self.config.timeout_seconds
+        poll_interval = 30
+
+        while time.time() < deadline:
+            result_files = list(results_base.glob("*/inferencemax_result.json"))
+            if result_files:
+                result_file = result_files[0]
+                workspace = result_file.parent
+                logger.info(f"Found result on NFS: {result_file}")
+
+                parsed = ResultParser.parse_inferencemax_result(
+                    result_file,
+                    framework=self.config.framework,
+                    model=self.config.model,
+                )
+                parsed.workspace_dir = str(workspace)
+                parsed.metadata = {
+                    "task_id": self._task_id,
+                    "recovered_from": "nfs",
+                }
+                return parsed
+
+            logger.info(
+                f"No result yet, retrying in {poll_interval}s... "
+                f"({int(deadline - time.time())}s remaining)"
+            )
+            time.sleep(poll_interval)
+
+        logger.warning(f"NFS recovery timed out for task {self._task_id}")
+        return None
 
     def cleanup(self) -> None:
         """Clean up resources."""
