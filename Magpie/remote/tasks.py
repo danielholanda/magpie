@@ -200,8 +200,8 @@ def _run_benchmark(mode_config: dict, ray_config: dict, task_id: str) -> dict:
         bench_cfg_dict["run_mode"] = "local"
 
     shared = ray_config.get("shared_storage_path", "/shared_nfs/magpie")
-    if not bench_cfg_dict.get("inferencemax_path"):
-        bench_cfg_dict["inferencemax_path"] = f"{shared}/InferenceMAX"
+    if not bench_cfg_dict.get("inferencex_path"):
+        bench_cfg_dict["inferencex_path"] = f"{shared}/InferenceX"
     if not bench_cfg_dict.get("hf_cache_path"):
         bench_cfg_dict["hf_cache_path"] = f"{shared}/hf_cache"
 

@@ -53,7 +53,7 @@ Full flag reference for `magpie` / `python -m Magpie`. Global options apply befo
 | `--system-profiler` | Enable system profiler (rocprof/ncu) |
 | `--run-mode` | `docker` \| `local` |
 | `--docker-image` | Override Docker image |
-| `--inferencemax-path` | Path to InferenceMAX (auto-cloned if empty) |
+| `--inferencex-path` | Path to InferenceX (auto-cloned if empty) |
 | `--benchmark-script` | Override benchmark script name |
 | `--timeout` | Timeout in seconds (default: 3600) |
 | `--output-dir`, `-o` | Output directory (default: ./results) |

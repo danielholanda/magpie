@@ -38,8 +38,8 @@ benchmark:
   # Optional: Override automatic image selection
   # docker_image: "lmsysorg/sglang:v0.5.8-rocm700-mi30x"
 
-  # Optional: InferenceMAX path
-  # inferencemax_path: "/YOUR_INFERENCEMAX_PATH/"
+  # Optional: InferenceX path
+  # inferencex_path: "/YOUR_INFERENCEX_PATH/"
 
   # Optional: Specify benchmark script directly
   benchmark_script: "dsr1_fp8_mi300x.sh"

@@ -37,8 +37,8 @@ benchmark:
     trace_end_pct: 80
     top_k: 20
 
-  # Will auto-clone InferenceMAX if not specified
-  # inferencemax_path: ""
+  # Will auto-clone InferenceX if not specified
+  # inferencex_path: ""
   
   # Auto-detect: will use Magpie generic script
   

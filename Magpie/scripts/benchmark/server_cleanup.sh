@@ -6,8 +6,8 @@
 ###############################################################################
 # Teardown for inference servers started with:  setsid <cmd> ... &
 #
-# Do not add this to InferenceMAX benchmark_lib.sh — Magpie copies this file
-# next to the other *.sh scripts in InferenceMAX/benchmarks/.
+# Do not add this to InferenceX benchmark_lib.sh — Magpie copies this file
+# next to the other *.sh scripts in InferenceX/benchmarks/.
 #
 # Requires setsid on the server line so the PID is process-group leader and
 # kill -TERM -$pid reaches vLLM Worker_TP / SGLang workers.
@@ -29,7 +29,7 @@ stop_benchmark_server_stack() {
     fi
 }
 
-# Magpie script traps use this name; InferenceMAX single_node may use either.
+# Magpie script traps use this name; InferenceX single_node may use either.
 magpie_stop_benchmark_server_stack() {
     stop_benchmark_server_stack "$@"
 }

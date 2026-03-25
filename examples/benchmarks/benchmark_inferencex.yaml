@@ -1,14 +1,14 @@
-# Test: Using InferenceMAX Native Script
+# Test: Using InferenceX Native Script
 # ========================================
 # This config tests the benchmark_script lookup priority:
-#   Priority 1: User-specified script in InferenceMAX/benchmarks/
-#   Priority 2: InferenceMAX native scripts: {prefix}_{precision}_{runner}.sh
+#   Priority 1: User-specified script in InferenceX/benchmarks/
+#   Priority 2: InferenceX native scripts: {prefix}_{precision}_{runner}.sh
 #   Priority 3: Magpie generic scripts: {framework}_{runner}.sh
 
 # Usage:
-#   python -m Magpie benchmark --benchmark-config examples/test_inferencemax_script.yaml
+#   python -m Magpie benchmark --benchmark-config examples/test_inferencex_script.yaml
 #
-# Expected: Should use dsr1_fp8_mi300x.sh from InferenceMAX
+# Expected: Should use dsr1_fp8_mi300x.sh from InferenceX
 
 benchmark:
   framework: sglang
@@ -34,10 +34,10 @@ benchmark:
     tracelens:
       enabled: false
       
-  # InferenceMAX path (empty string will auto clone)
-  # inferencemax_path: ""
+  # InferenceX path (empty string will auto clone)
+  # inferencex_path: ""
   
-  # TEST: Specify InferenceMAX native script directly
+  # TEST: Specify InferenceX native script directly
   benchmark_script: "dsr1_fp8_mi300x.sh"
   
   # Timeout (DeepSeek-R1 needs time to load)

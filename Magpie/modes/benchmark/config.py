@@ -274,7 +274,7 @@ class RayConfig:
             ``"auto"`` — on the head node (connects via local GCS).
             ``"ray://<host>:10001"`` — from a remote machine via Ray Client.
         shared_storage_path: NFS path on **worker** nodes for HF model
-            cache and InferenceMAX.
+            cache and InferenceX.
         entrypoint_num_gpus: GPU resources requested per task.
         entrypoint_num_cpus: CPU resources requested per task.
         multi_node: Whether the benchmark requires multiple nodes.
@@ -312,9 +312,9 @@ class RayConfig:
         return f"{self.shared_storage_path}/hf_cache"
 
     @property
-    def inferencemax_dir(self) -> str:
-        """InferenceMAX installation on the shared storage."""
-        return f"{self.shared_storage_path}/InferenceMAX"
+    def inferencex_dir(self) -> str:
+        """InferenceX installation on the shared storage."""
+        return f"{self.shared_storage_path}/InferenceX"
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -369,9 +369,9 @@ class BenchmarkConfig:
         docker_image: Override automatic image selection
         gpu_arch: GPU architecture (auto-detected if not specified)
         timeout_seconds: Benchmark timeout
-        inferencemax_path: Path to InferenceMAX installation
+        inferencex_path: Path to InferenceX installation
         hf_cache_path: HuggingFace cache directory
-        runner_type: Hardware runner type for InferenceMAX (e.g., "mi300x", "h100")
+        runner_type: Hardware runner type for InferenceX (e.g., "mi300x", "h100")
     """
     framework: str
     model: str
@@ -392,13 +392,13 @@ class BenchmarkConfig:
     timeout_seconds: float = 3600.0
     
     # Paths
-    inferencemax_path: str = "/root/hao_workspace/InferenceMAX"
+    inferencex_path: str = "/root/workspace/InferenceX"
     hf_cache_path: Optional[str] = None
     
     # Gap analysis
     gap_analysis: GapAnalysisConfig = field(default_factory=GapAnalysisConfig)
     
-    # InferenceMAX specific
+    # InferenceX specific
     runner_type: Optional[str] = None
     benchmark_script: Optional[str] = None
     
@@ -445,7 +445,7 @@ class BenchmarkConfig:
     
     def get_env_vars(self) -> Dict[str, str]:
         """
-        Get environment variables for InferenceMAX.
+        Get environment variables for InferenceX.
         
         Returns:
             Dictionary of environment variable names to values
@@ -467,7 +467,7 @@ class BenchmarkConfig:
     
     def get_benchmark_script_name(self) -> str:
         """
-        Determine the InferenceMAX benchmark script name.
+        Determine the InferenceX benchmark script name.
         
         Returns:
             Script name like "dsr1_fp8_mi300x.sh"
@@ -504,7 +504,7 @@ class BenchmarkConfig:
             "docker_image": self.docker_image,
             "gpu_arch": self.gpu_arch,
             "timeout_seconds": self.timeout_seconds,
-            "inferencemax_path": self.inferencemax_path,
+            "inferencex_path": self.inferencex_path,
             "hf_cache_path": self.hf_cache_path,
             "runner_type": self.runner_type,
             "benchmark_script": self.benchmark_script,
@@ -536,7 +536,11 @@ class BenchmarkConfig:
             docker_image=data.get("docker_image"),
             gpu_arch=data.get("gpu_arch"),
             timeout_seconds=data.get("timeout_seconds", 3600.0),
-            inferencemax_path=data.get("inferencemax_path", "/root/hao_workspace/InferenceMAX"),
+            inferencex_path=(
+                data.get("inferencex_path")
+                or data.get("inferencemax_path")
+                or "/root/workspace/InferenceX"
+            ),
             hf_cache_path=data.get("hf_cache_path"),
             runner_type=data.get("runner_type"),
             benchmark_script=data.get("benchmark_script"),

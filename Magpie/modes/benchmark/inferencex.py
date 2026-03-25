@@ -4,9 +4,9 @@
 # See LICENSE for license information.
 ###############################################################################
 """
-InferenceMAX repository management.
+InferenceX repository management.
 
-Handles automatic cloning and validation of the InferenceMAX repository
+Handles automatic cloning and validation of the InferenceX repository
 for benchmark execution.
 """
 
@@ -18,22 +18,22 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# InferenceMAX repository configuration
-INFERENCEMAX_REPO_URL = "https://github.com/SemiAnalysisAI/InferenceX.git"
+# InferenceX repository configuration
+INFERENCEX_REPO_URL = "https://github.com/SemiAnalysisAI/InferenceX.git"
 # Default directory:
 _PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
-INFERENCEMAX_DEFAULT_DIR = str(_PROJECT_ROOT / "InferenceMAX")
+INFERENCEX_DEFAULT_DIR = str(_PROJECT_ROOT / "InferenceX")
 
 # Placeholder values that indicate the path is not configured
 PLACEHOLDER_VALUES = {
-    "YOUR_INFERENCEMAX_PATH",
+    "YOUR_INFERENCEX_PATH",
     "",
 }
 
 
-class InferenceMAXManager:
+class InferenceXManager:
     """
-    Manages InferenceMAX repository for benchmark execution.
+    Manages InferenceX repository for benchmark execution.
     
     Handles:
     - Validation of existing installation
@@ -43,14 +43,14 @@ class InferenceMAXManager:
     
     def __init__(
         self,
-        repo_url: str = INFERENCEMAX_REPO_URL,
-        default_dir: str = INFERENCEMAX_DEFAULT_DIR,
+        repo_url: str = INFERENCEX_REPO_URL,
+        default_dir: str = INFERENCEX_DEFAULT_DIR,
     ):
         """
-        Initialize InferenceMAX manager.
+        Initialize InferenceX manager.
         
         Args:
-            repo_url: Git repository URL for InferenceMAX
+            repo_url: Git repository URL for InferenceX
             default_dir: Default directory to clone into
         """
         self.repo_url = repo_url
@@ -58,26 +58,26 @@ class InferenceMAXManager:
     
     def ensure_available(self, configured_path: Optional[str] = None) -> str:
         """
-        Ensure InferenceMAX is available at the specified path.
+        Ensure InferenceX is available at the specified path.
         
         If the path doesn't exist or is a placeholder value, automatically
-        clone InferenceMAX from the repository.
+        clone InferenceX from the repository.
         
         Args:
-            configured_path: Configured path to InferenceMAX (may be None or placeholder)
+            configured_path: Configured path to InferenceX (may be None or placeholder)
             
         Returns:
-            Valid path to InferenceMAX installation
+            Valid path to InferenceX installation
             
         Raises:
-            RuntimeError: If unable to clone or validate InferenceMAX
+            RuntimeError: If unable to clone or validate InferenceX
         """
         # Determine if path is a placeholder or not configured
         is_placeholder = self._is_placeholder(configured_path)
         
         # Check if configured path exists
         if not is_placeholder and configured_path and os.path.exists(configured_path):
-            logger.debug(f"InferenceMAX found at: {configured_path}")
+            logger.debug(f"InferenceX found at: {configured_path}")
             return configured_path
         
         # Determine target directory
@@ -86,10 +86,10 @@ class InferenceMAXManager:
         # Check if already exists at target directory
         if os.path.exists(target_dir):
             if self._validate_installation(target_dir):
-                logger.info(f"InferenceMAX already exists at: {target_dir}")
+                logger.info(f"InferenceX already exists at: {target_dir}")
                 return target_dir
             else:
-                logger.warning(f"Directory exists but doesn't appear to be InferenceMAX: {target_dir}")
+                logger.warning(f"Directory exists but doesn't appear to be InferenceX: {target_dir}")
                 # Still return it, let downstream code handle validation
                 return target_dir
         
@@ -104,16 +104,16 @@ class InferenceMAXManager:
     
     def _validate_installation(self, path: str) -> bool:
         """
-        Validate that the path contains a valid InferenceMAX installation.
+        Validate that the path contains a valid InferenceX installation.
         
         Args:
             path: Path to validate
             
         Returns:
-            True if valid InferenceMAX installation
+            True if valid InferenceX installation
         """
         required_paths = [
-            "benchmarks",  # InferenceMAX benchmark scripts directory
+            "benchmarks",  # InferenceX benchmark scripts directory
         ]
         
         for required in required_paths:
@@ -124,7 +124,7 @@ class InferenceMAXManager:
     
     def _clone_repository(self, target_dir: str) -> str:
         """
-        Clone InferenceMAX repository.
+        Clone InferenceX repository.
         
         Args:
             target_dir: Directory to clone into
@@ -135,7 +135,7 @@ class InferenceMAXManager:
         Raises:
             RuntimeError: If clone fails
         """
-        logger.info(f"InferenceMAX not found. Cloning from {self.repo_url}...")
+        logger.info(f"InferenceX not found. Cloning from {self.repo_url}...")
         logger.info(f"Clone destination: {target_dir}")
         
         try:
@@ -154,44 +154,44 @@ class InferenceMAXManager:
             
             if result.returncode != 0:
                 error_msg = result.stderr.strip() if result.stderr else "Unknown error"
-                logger.error(f"Failed to clone InferenceMAX: {error_msg}")
+                logger.error(f"Failed to clone InferenceX: {error_msg}")
                 raise RuntimeError(f"git clone failed: {error_msg}")
             
-            logger.info(f"Successfully cloned InferenceMAX to: {target_dir}")
+            logger.info(f"Successfully cloned InferenceX to: {target_dir}")
             return target_dir
             
         except subprocess.TimeoutExpired:
-            logger.error("InferenceMAX clone timed out after 5 minutes")
+            logger.error("InferenceX clone timed out after 5 minutes")
             raise RuntimeError("git clone timed out after 5 minutes")
         except FileNotFoundError:
             logger.error("git command not found. Please install git.")
             raise RuntimeError("git is not installed. Please install git first.")
         except OSError as e:
             logger.error(f"Failed to create directory or clone: {e}")
-            raise RuntimeError(f"Failed to setup InferenceMAX: {e}")
+            raise RuntimeError(f"Failed to setup InferenceX: {e}")
 
 
 # Module-level instance for convenience
-_manager: Optional[InferenceMAXManager] = None
+_manager: Optional[InferenceXManager] = None
 
 
-def get_manager() -> InferenceMAXManager:
-    """Get the global InferenceMAX manager instance."""
+def get_manager() -> InferenceXManager:
+    """Get the global InferenceX manager instance."""
     global _manager
     if _manager is None:
-        _manager = InferenceMAXManager()
+        _manager = InferenceXManager()
     return _manager
 
 
-def ensure_inferencemax_available(configured_path: Optional[str] = None) -> str:
+def ensure_inferencex_available(configured_path: Optional[str] = None) -> str:
     """
-    Convenience function to ensure InferenceMAX is available.
+    Convenience function to ensure InferenceX is available.
     
     Args:
-        configured_path: Configured path to InferenceMAX
+        configured_path: Configured path to InferenceX
         
     Returns:
-        Valid path to InferenceMAX installation
+        Valid path to InferenceX installation
     """
     return get_manager().ensure_available(configured_path)
 

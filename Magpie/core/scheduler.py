@@ -589,7 +589,7 @@ class Scheduler:
         Run benchmark mode.
 
         Benchmark mode always uses container environment for execution.
-        Uses InferenceMAX as backend for vLLM/SGLang benchmarks.
+        Uses InferenceX as backend for vLLM/SGLang benchmarks.
 
         Args:
             benchmark_config: Benchmark configuration dict containing:

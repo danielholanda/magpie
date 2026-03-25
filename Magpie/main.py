@@ -986,7 +986,7 @@ def run_benchmark(args, config: Dict[str, Any]) -> int:
                 },
             },
             "docker_image": args.docker_image,
-            "inferencemax_path": args.inferencemax_path,
+            "inferencex_path": args.inferencex_path,
             "benchmark_script": args.benchmark_script,
             "timeout_seconds": args.timeout,
         }
@@ -1007,8 +1007,8 @@ def run_benchmark(args, config: Dict[str, Any]) -> int:
     bench_settings = config.get("benchmark", {})
     
     # Merge with framework config defaults (auto-clone handled in BenchmarkMode)
-    if "inferencemax_path" not in benchmark_cfg or not benchmark_cfg["inferencemax_path"]:
-        benchmark_cfg["inferencemax_path"] = bench_settings.get("inferencemax_path", "")
+    if "inferencex_path" not in benchmark_cfg or not benchmark_cfg["inferencex_path"]:
+        benchmark_cfg["inferencex_path"] = bench_settings.get("inferencex_path", "")
     
     # Create benchmark config object
     try:
@@ -1197,13 +1197,13 @@ def create_parser() -> argparse.ArgumentParser:
         "--docker-image", type=str, help="Override Docker image"
     )
     benchmark_parser.add_argument(
-        "--inferencemax-path", type=str,
+        "--inferencex-path", type=str,
         default="",
-        help="Path to InferenceMAX installation (auto-cloned if not specified)"
+        help="Path to InferenceX installation (auto-cloned if not specified)"
     )
     benchmark_parser.add_argument(
         "--benchmark-script", type=str,
-        help="InferenceMAX benchmark script name"
+        help="InferenceX benchmark script name"
     )
     benchmark_parser.add_argument(
         "--timeout", type=int, default=3600, help="Benchmark timeout in seconds"

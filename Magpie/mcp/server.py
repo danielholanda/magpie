@@ -1249,7 +1249,7 @@ def benchmark(
     gap_analysis_ignore_categories: Optional[List[str]] = None,
     docker_image: Optional[str] = None,
     gpu_arch: Optional[str] = None,
-    inferencemax_path: str = "",
+    inferencex_path: str = "",
     hf_cache_path: Optional[str] = None,
     benchmark_script: Optional[str] = None,
     runner_type: Optional[str] = None,
@@ -1266,11 +1266,11 @@ def benchmark(
     """
     Run a framework-level LLM inference benchmark (vLLM or SGLang).
 
-    Launches the inference server using InferenceMAX scripts, runs a benchmark
+    Launches the inference server using InferenceX scripts, runs a benchmark
     client, and collects throughput/latency metrics. Optionally collects torch
     profiler traces, runs TraceLens analysis, and performs gap analysis.
 
-    InferenceMAX is auto-cloned if not present.
+    InferenceX is auto-cloned if not present.
 
     Supports three execution modes:
     - "docker": Run inside a Docker container (default)
@@ -1302,7 +1302,7 @@ def benchmark(
             Default: ["gpu_user_annotation"]
         docker_image: Override automatic Docker image selection (optional)
         gpu_arch: Force GPU architecture, e.g. "gfx942" (auto-detected if omitted)
-        inferencemax_path: Path to InferenceMAX installation (auto-cloned if empty)
+        inferencex_path: Path to InferenceX installation (auto-cloned if empty)
         hf_cache_path: HuggingFace cache directory (default: ~/.cache/huggingface)
         benchmark_script: Override benchmark script name (e.g., "dsr1_fp8_mi300x.sh")
         runner_type: Hardware runner type (e.g., "mi300x", "h100") - auto-detected if omitted
@@ -1394,7 +1394,7 @@ def benchmark(
             "docker_image": docker_image,
             "gpu_arch": gpu_arch,
             "timeout_seconds": timeout_seconds,
-            "inferencemax_path": inferencemax_path,
+            "inferencex_path": inferencex_path,
             "hf_cache_path": hf_cache_path,
             "benchmark_script": benchmark_script,
             "runner_type": runner_type,
@@ -1702,7 +1702,7 @@ def get_benchmark_result(
     Args:
         workspace_dir: Path to the benchmark workspace directory
         include_kernel_summary: Include per-kernel profiling breakdown (default: True)
-        include_raw_result: Include raw InferenceMAX JSON output (default: False)
+        include_raw_result: Include raw InferenceX JSON output (default: False)
         include_tracelens_files: List TraceLens output files (default: True)
 
     Returns:
@@ -1746,11 +1746,11 @@ def get_benchmark_result(
                 result["kernel_summary"] = report.get("kernel_summary", [])
 
             if include_raw_result:
-                # Load raw InferenceMAX result
-                raw_file = ws / "inferencemax_result.json"
+                # Load raw InferenceX result
+                raw_file = ws / "inferencex_result.json"
                 if raw_file.exists():
                     with open(raw_file) as f:
-                        result["raw_inferencemax_result"] = json.load(f)
+                        result["raw_inferencex_result"] = json.load(f)
         else:
             result["error"] = "benchmark_report.json not found in workspace"
 

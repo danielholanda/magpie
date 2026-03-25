@@ -20,7 +20,7 @@ from .benchmarker import BenchmarkMode
 from .result import BenchmarkResult
 from .workspace import WorkspaceManager
 from .image_selector import ImageSelector
-from .inferencemax import InferenceMAXManager, ensure_inferencemax_available
+from .inferencex import InferenceXManager, ensure_inferencex_available
 from .gap_analysis import GapAnalyzer, GapAnalysisResult
 
 __all__ = [
@@ -35,8 +35,8 @@ __all__ = [
     "GapAnalysisResult",
     "WorkspaceManager",
     "ImageSelector",
-    "InferenceMAXManager",
-    "ensure_inferencemax_available",
+    "InferenceXManager",
+    "ensure_inferencex_available",
 ]
 
 

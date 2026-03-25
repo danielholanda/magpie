@@ -130,7 +130,7 @@ For **compare**, use `kernels:` as a list of kernel entries (each with `id`, `ty
 ## List / get benchmark results (no CLI)
 
 - **List:** Results live under the benchmark `--output-dir` (default: `./results`); each run has a timestamped workspace (e.g. `results/benchmark_vllm_<timestamp>/`).
-- **Get result:** Open `benchmark_report.json` or `inferencemax_result.json` in that workspace.
+- **Get result:** Open `benchmark_report.json` or `inferencex_result.json` in that workspace.
 - **Compare runs:** Diff two workspace reports or run two benchmarks and compare; for TraceLens comparison use TraceLens tooling if available.
 
 ## Additional resources
