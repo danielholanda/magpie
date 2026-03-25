@@ -91,7 +91,7 @@ correctness:
   # Activate by setting: backend: accordo
   accordo:
     atol: 1.0e-6               # Absolute tolerance (np.allclose)
-    rtol: 0.0                  # Relative tolerance
+    rtol: 1.0e-5               # Relative tolerance (torch.allclose-style default)
     equal_nan: false           # Treat NaN as equal when comparing
     timeout_seconds: 30        # Timeout per snapshot capture
 

@@ -239,7 +239,7 @@ def _get_correctness_config(config: Dict[str, Any]) -> Dict[str, Any]:
     acc_cfg = corr_cfg.get("accordo", {})
     accordo_settings = {
         "atol": acc_cfg.get("atol", 1e-6),
-        "rtol": acc_cfg.get("rtol", 0.0),
+        "rtol": acc_cfg.get("rtol", 1e-5),
         "equal_nan": acc_cfg.get("equal_nan", False),
         "timeout_seconds": acc_cfg.get("timeout_seconds", 30),
     }

@@ -221,7 +221,9 @@ def analyze(
     accordo_kernel_name: str = "",
     accordo_reference_binary: str = "",
     accordo_optimized_binary: str = "",
-    accordo_tolerance: float = 1e-6,
+    accordo_atol: float = 1e-6,
+    accordo_rtol: float = 1e-5,
+    accordo_equal_nan: bool = False,
     accordo_timeout_seconds: int = 30,
 ) -> str:
     """
@@ -240,7 +242,9 @@ def analyze(
         accordo_kernel_name: Kernel function name for Accordo validation (required when correctness_backend="accordo")
         accordo_reference_binary: Reference binary for Accordo comparison
         accordo_optimized_binary: Optimized binary for Accordo comparison
-        accordo_tolerance: Tolerance for Accordo np.allclose comparison (default: 1e-6)
+        accordo_atol: Absolute tolerance for Accordo np.allclose (default: 1e-6)
+        accordo_rtol: Relative tolerance (default: 1e-5, torch-style)
+        accordo_equal_nan: If True, NaN compares equal
         accordo_timeout_seconds: Timeout per snapshot capture in seconds (default: 30)
 
     Returns:
@@ -315,7 +319,9 @@ def analyze(
                         "kernel_name": accordo_kernel_name or None,
                         "reference_binary": accordo_reference_binary or None,
                         "optimized_binary": accordo_optimized_binary or None,
-                        "tolerance": accordo_tolerance,
+                        "atol": accordo_atol,
+                        "rtol": accordo_rtol,
+                        "equal_nan": accordo_equal_nan,
                         "timeout_seconds": accordo_timeout_seconds,
                         "working_directory": working_dir or None,
                     }
@@ -548,7 +554,9 @@ def compare(
     accordo_kernel_name: str = "",
     accordo_reference_binary: str = "",
     accordo_optimized_binary: str = "",
-    accordo_tolerance: float = 1e-6,
+    accordo_atol: float = 1e-6,
+    accordo_rtol: float = 1e-5,
+    accordo_equal_nan: bool = False,
     accordo_timeout_seconds: int = 30,
 ) -> str:
     """
@@ -569,7 +577,9 @@ def compare(
         accordo_kernel_name: Kernel function name for Accordo validation (required when correctness_backend="accordo")
         accordo_reference_binary: Reference binary for Accordo comparison
         accordo_optimized_binary: Optimized binary for Accordo comparison
-        accordo_tolerance: Tolerance for Accordo np.allclose comparison (default: 1e-6)
+        accordo_atol: Absolute tolerance for Accordo (default: 1e-6)
+        accordo_rtol: Relative tolerance (default: 1e-5, torch-style)
+        accordo_equal_nan: If True, NaN compares equal
         accordo_timeout_seconds: Timeout per snapshot capture in seconds (default: 30)
 
     Returns:
@@ -656,7 +666,9 @@ def compare(
                         "kernel_name": accordo_kernel_name or None,
                         "reference_binary": accordo_reference_binary or None,
                         "optimized_binary": accordo_optimized_binary or None,
-                        "tolerance": accordo_tolerance,
+                        "atol": accordo_atol,
+                        "rtol": accordo_rtol,
+                        "equal_nan": accordo_equal_nan,
                         "timeout_seconds": accordo_timeout_seconds,
                         "working_directory": first_wd,
                     }

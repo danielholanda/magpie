@@ -435,8 +435,11 @@ class Correctness:
                 success=False,
                 errors=(
                     "'accordo' CLI not found on PATH. Install IntelliKit Accordo "
-                    "(pip install intellikit[accordo] or "
-                    "pip install -e /path/to/intellikit/accordo)."
+                    '(pip install "git+https://github.com/AMDResearch/intellikit.git@'
+                    '0f2a15c9eba3717e984961e2bcf72a0aa3052713#subdirectory=accordo" '
+                    "or git clone https://github.com/AMDResearch/intellikit.git && "
+                    "cd intellikit && git checkout "
+                    "0f2a15c9eba3717e984961e2bcf72a0aa3052713 && pip install -e accordo)."
                 ),
             )
 
@@ -458,7 +461,6 @@ class Correctness:
                 "'optimized_binary' to be set in accordo config.",
             )
 
-        tolerance = accordo_cfg.tolerance
         perf_timeout = getattr(
             self.pipeline_cfg.performance_config, "timeout_seconds", None
         )
@@ -476,11 +478,14 @@ class Correctness:
             "--kernel-name", kernel_name,
             "--ref-binary", ref_binary,
             "--opt-binary", opt_binary,
-            "--tolerance", str(tolerance),
+            "--atol", str(accordo_cfg.atol),
+            "--rtol", str(accordo_cfg.rtol),
             "--timeout", str(int(timeout)),
             "--working-dir", binary_working_dir,
             "--log-level", "INFO",
         ]
+        if accordo_cfg.equal_nan:
+            cmd.extend(["--equal-nan"])
 
         if accordo_cfg.kernel_args:
             args_str = ",".join(
@@ -549,7 +554,7 @@ class Correctness:
                     MetricResult(
                         name=f"accordo_array_{arr_name}",
                         success=True,
-                        threshold=tolerance,
+                        threshold=accordo_cfg.atol,
                     )
                 )
         else:
@@ -561,12 +566,19 @@ class Correctness:
                 )
             )
             for mismatch in output.get("mismatches", []):
+                argn = mismatch.get("arg_name", "?")
+                disp_idx = mismatch.get("dispatch_index")
+                mm_name = (
+                    f"accordo_mismatch_d{disp_idx}_{argn}"
+                    if disp_idx is not None
+                    else f"accordo_mismatch_{argn}"
+                )
                 metrics.append(
                     MetricResult(
-                        name=f"accordo_mismatch_{mismatch.get('arg_name', '?')}",
+                        name=mm_name,
                         success=False,
                         value=mismatch.get("max_difference"),
-                        threshold=tolerance,
+                        threshold=accordo_cfg.atol,
                     )
                 )
 

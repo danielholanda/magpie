@@ -54,9 +54,9 @@ class AccordoConfig:
         kernel_name: GPU kernel function name to intercept.
         reference_binary: Command (or path) to the reference binary.
         optimized_binary: Command (or path) to the optimized binary.
-        atol: Absolute tolerance for ``np.allclose``.
-        rtol: Relative tolerance for ``np.allclose``.
-        equal_nan: If True, NaN compares equal.
+        atol: Absolute tolerance for ``np.allclose`` (default ``1e-6``).
+        rtol: Relative tolerance (default ``1e-5``, same as ``torch.allclose``).
+        equal_nan: If true, pass ``--equal-nan`` to ``accordo validate``; if false, omit it (CLI default).
         timeout_seconds: Timeout per snapshot capture in seconds.
                          *None* means inherit from the task-level timeout.
         kernel_args: Optional manual kernel args as ``[(name, type), ...]``.
@@ -70,7 +70,7 @@ class AccordoConfig:
     reference_binary: Optional[str] = None
     optimized_binary: Optional[str] = None
     atol: float = 1e-6
-    rtol: float = 0.0
+    rtol: float = 1e-5
     equal_nan: bool = False
     timeout_seconds: Optional[int] = None
     kernel_args: Optional[List[Tuple[str, str]]] = None
@@ -150,7 +150,7 @@ class CorrectnessConfig:
                 reference_binary=acc.get("reference_binary"),
                 optimized_binary=acc.get("optimized_binary"),
                 atol=acc.get("atol", 1e-6),
-                rtol=acc.get("rtol", 0.0),
+                rtol=acc.get("rtol", 1e-5),
                 equal_nan=acc.get("equal_nan", False),
                 timeout_seconds=acc.get("timeout_seconds"),
                 kernel_args=acc.get("kernel_args"),
