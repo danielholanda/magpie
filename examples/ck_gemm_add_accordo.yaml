@@ -4,7 +4,7 @@
 #   git clone https://github.com/ROCm/composable_kernel.git
 #   export CK_HOME=/path/to/composable_kernel
 #   Rebuild with debug info: cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo ... && make test_gemm_add_xdl -j8
-#   pip install intellikit[accordo]
+#   pip install "git+https://github.com/AMDResearch/intellikit.git@0f2a15c9eba3717e984961e2bcf72a0aa3052713#subdirectory=accordo"
 # Note:
 #   CK binaries must be compiled with debug info (-g / RelWithDebInfo) so Accordo
 #   can extract kernel arguments via kernelDB. Release builds will fail with
@@ -33,4 +33,4 @@ correctness:
     kernel_name: "DeviceGemmMultipleD_Xdl_CShuffle"
     reference_binary: "bin/test_gemm_add_xdl"
     optimized_binary: "bin/test_gemm_add_xdl"
-    tolerance: 1.0e-4
+    atol: 1.0e-4

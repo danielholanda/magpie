@@ -90,7 +90,9 @@ correctness:
   # Captures kernel output buffers and compares reference vs. optimized.
   # Activate by setting: backend: accordo
   accordo:
-    tolerance: 1.0e-6          # Absolute tolerance for np.allclose comparison
+    atol: 1.0e-6               # Absolute tolerance (np.allclose)
+    rtol: 0.0                  # Relative tolerance
+    equal_nan: false           # Treat NaN as equal when comparing
     timeout_seconds: 30        # Timeout per snapshot capture
 
 # =============================================================================
