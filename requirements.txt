@@ -20,9 +20,13 @@ mcp>=1.0.0
 # see https://docs.nvidia.com/nsight-compute/NsightComputeCli/index.html
 
 # Optional: IntelliKit Metrix (AMD GPU human-readable profiling metrics)
-# pip install git+https://github.com/AMDResearch/intellikit.git#subdirectory=metrix
-# or from local source: pip install -e /path/to/intellikit/metrix
+# pip install "git+https://github.com/AMDResearch/intellikit.git@0f2a15c9eba3717e984961e2bcf72a0aa3052713#subdirectory=metrix"
+# or clone and install editable:
+#   git clone https://github.com/AMDResearch/intellikit.git && cd intellikit
+#   git checkout 0f2a15c9eba3717e984961e2bcf72a0aa3052713 && pip install -e metrix
 
 # Optional: IntelliKit Accordo (AMD GPU kernel correctness validation via HSA interception)
-# pip install git+https://github.com/AMDResearch/intellikit.git#subdirectory=accordo
-# or from local source: pip install -e /path/to/intellikit/accordo
+# pip install "git+https://github.com/AMDResearch/intellikit.git@0f2a15c9eba3717e984961e2bcf72a0aa3052713#subdirectory=accordo"
+# or clone and install editable:
+#   git clone https://github.com/AMDResearch/intellikit.git && cd intellikit
+#   git checkout 0f2a15c9eba3717e984961e2bcf72a0aa3052713 && pip install -e accordo
