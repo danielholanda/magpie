@@ -931,7 +931,7 @@ class Performance:
                 errors=(
                     "metrix not found. Install IntelliKit Metrix "
                     '(pip install "git+https://github.com/AMDResearch/intellikit.git@'
-                    '0f2a15c9eba3717e984961e2bcf72a0aa3052713#subdirectory=metrix").'
+                    '1511ed984c01f2254df3ca567153c5e7cb2ac9d9#subdirectory=metrix").'
                 ),
             )
 
