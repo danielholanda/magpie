@@ -54,7 +54,9 @@ class AccordoConfig:
         kernel_name: GPU kernel function name to intercept.
         reference_binary: Command (or path) to the reference binary.
         optimized_binary: Command (or path) to the optimized binary.
-        tolerance: Absolute tolerance for ``np.allclose`` comparison.
+        atol: Absolute tolerance for ``np.allclose``.
+        rtol: Relative tolerance for ``np.allclose``.
+        equal_nan: If True, NaN compares equal.
         timeout_seconds: Timeout per snapshot capture in seconds.
                          *None* means inherit from the task-level timeout.
         kernel_args: Optional manual kernel args as ``[(name, type), ...]``.
@@ -67,7 +69,9 @@ class AccordoConfig:
     kernel_name: Optional[str] = None
     reference_binary: Optional[str] = None
     optimized_binary: Optional[str] = None
-    tolerance: float = 1e-6
+    atol: float = 1e-6
+    rtol: float = 0.0
+    equal_nan: bool = False
     timeout_seconds: Optional[int] = None
     kernel_args: Optional[List[Tuple[str, str]]] = None
     working_directory: Optional[str] = None
@@ -145,7 +149,9 @@ class CorrectnessConfig:
                 kernel_name=acc.get("kernel_name"),
                 reference_binary=acc.get("reference_binary"),
                 optimized_binary=acc.get("optimized_binary"),
-                tolerance=acc.get("tolerance", 1e-6),
+                atol=acc.get("atol", 1e-6),
+                rtol=acc.get("rtol", 0.0),
+                equal_nan=acc.get("equal_nan", False),
                 timeout_seconds=acc.get("timeout_seconds"),
                 kernel_args=acc.get("kernel_args"),
                 working_directory=acc.get("working_directory"),
