@@ -16,6 +16,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict
 
+from Magpie.modes.benchmark.config import DEFAULT_SHARED_STORAGE_PATH
+
 logger = logging.getLogger("magpie.remote.tasks")
 
 # Registry: mode_type -> runner function
@@ -81,9 +83,13 @@ def run_task(config: Dict[str, Any]) -> Dict[str, Any]:
 
 def _setup_env(ray_config: dict) -> None:
     """Set HF cache paths from shared storage config."""
-    shared = ray_config.get("shared_storage_path", "/shared_nfs/magpie")
-    os.environ.setdefault("HF_HOME", f"{shared}/hf_cache")
-    os.environ.setdefault("TRANSFORMERS_CACHE", f"{shared}/hf_cache/hub")
+    shared_storage_root = ray_config.get(
+        "shared_storage_path", DEFAULT_SHARED_STORAGE_PATH
+    )
+    os.environ.setdefault("HF_HOME", f"{shared_storage_root}/hf_cache")
+    os.environ.setdefault(
+        "TRANSFORMERS_CACHE", f"{shared_storage_root}/hf_cache/hub"
+    )
 
 
 def _clear_hidden_gpus() -> None:
@@ -199,14 +205,21 @@ def _run_benchmark(mode_config: dict, ray_config: dict, task_id: str) -> dict:
     if bench_cfg_dict.get("run_mode") == "ray":
         bench_cfg_dict["run_mode"] = "local"
 
-    shared = ray_config.get("shared_storage_path", "/shared_nfs/magpie")
+    shared_storage_root = ray_config.get(
+        "shared_storage_path", DEFAULT_SHARED_STORAGE_PATH
+    )
     if not bench_cfg_dict.get("inferencex_path"):
-        bench_cfg_dict["inferencex_path"] = f"{shared}/InferenceX"
+        bench_cfg_dict["inferencex_path"] = f"{shared_storage_root}/InferenceX"
     if not bench_cfg_dict.get("hf_cache_path"):
-        bench_cfg_dict["hf_cache_path"] = f"{shared}/hf_cache"
+        bench_cfg_dict["hf_cache_path"] = f"{shared_storage_root}/hf_cache"
 
     job_dir = str(
-        Path(ray_config.get("results_dir", f"{shared}/results")) / task_id
+        Path(
+            ray_config.get(
+                "results_dir", f"{shared_storage_root}/results"
+            )
+        )
+        / task_id
     )
 
     benchmark_config = BenchmarkConfig.from_dict(bench_cfg_dict)

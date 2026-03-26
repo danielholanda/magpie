@@ -31,6 +31,11 @@ class TraceLensExportFormat(Enum):
     EXCEL = "excel"
 
 
+# Default root on Ray workers for HF cache, InferenceX, and benchmark results.
+# Use the same mount on driver and workers (NFS, Lustre, parallel filesystem, etc.).
+DEFAULT_SHARED_STORAGE_PATH = "/shared_nfs/magpie"
+
+
 @dataclass
 class TorchProfilerConfig:
     """
@@ -273,8 +278,8 @@ class RayConfig:
         cluster_address: How to connect to the Ray cluster.
             ``"auto"`` — on the head node (connects via local GCS).
             ``"ray://<host>:10001"`` — from a remote machine via Ray Client.
-        shared_storage_path: NFS path on **worker** nodes for HF model
-            cache and InferenceX.
+        shared_storage_path: Shared filesystem path on **worker** nodes for HF
+            model cache and InferenceX (same mount on driver + workers).
         entrypoint_num_gpus: GPU resources requested per task.
         entrypoint_num_cpus: CPU resources requested per task.
         multi_node: Whether the benchmark requires multiple nodes.
@@ -288,8 +293,8 @@ class RayConfig:
         magpie_install_path: Explicit Magpie project root for pip install.
     """
     cluster_address: str = "auto"
-    shared_storage_path: str = "/shared_nfs/magpie"
-    entrypoint_num_gpus: int = 1
+    shared_storage_path: str = DEFAULT_SHARED_STORAGE_PATH
+    entrypoint_num_gpus: int = 0
     entrypoint_num_cpus: int = 16
     multi_node: bool = False
     total_num_gpus: int = 8
@@ -339,9 +344,11 @@ class RayConfig:
         """Create from dictionary."""
         return cls(
             cluster_address=data.get("cluster_address", "auto"),
-            shared_storage_path=data.get("shared_storage_path", "/shared_nfs/magpie"),
+            shared_storage_path=data.get(
+                "shared_storage_path", DEFAULT_SHARED_STORAGE_PATH
+            ),
             entrypoint_num_gpus=data.get("entrypoint_num_gpus", 0),
-            entrypoint_num_cpus=data.get("entrypoint_num_cpus", 4),
+            entrypoint_num_cpus=data.get("entrypoint_num_cpus", 16),
             multi_node=data.get("multi_node", False),
             total_num_gpus=data.get("total_num_gpus", 8),
             num_nodes=data.get("num_nodes", 1),
@@ -390,7 +397,7 @@ class BenchmarkConfig:
     docker_image: Optional[str] = None
     gpu_arch: Optional[str] = None
     timeout_seconds: float = 3600.0
-    
+
     # Paths
     inferencex_path: str = "/root/workspace/InferenceX"
     hf_cache_path: Optional[str] = None

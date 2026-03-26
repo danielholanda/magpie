@@ -7,7 +7,7 @@
 Persistent job record store for Ray remote execution.
 
 Uses SQLite to track submitted Ray jobs across MCP server restarts.
-The database file is stored on shared NFS so it survives process restarts.
+The database file is often placed on shared storage so it survives process restarts.
 """
 
 import logging

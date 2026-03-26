@@ -32,7 +32,7 @@ Ray Remote Execution Tools:
   - ray_task_result: Retrieve result from a completed Ray task
   - ray_task_cancel: Cancel a running Ray task
   - ray_task_list: List all tracked Ray tasks
-  - benchmark_batch: Submit multiple benchmarks to Ray in parallel
+  - benchmark_batch: Submit multiple Ray benchmarks (sequential by default; optional async submit)
 
 Usage:
     python -m Magpie.mcp
@@ -44,6 +44,8 @@ import os
 import yaml  # type: ignore[import-untyped]
 from pathlib import Path
 from typing import List, Dict, Any, TYPE_CHECKING, Optional, Tuple
+
+from ..modes.benchmark.config import DEFAULT_SHARED_STORAGE_PATH
 
 from mcp.server.fastmcp import FastMCP
 from starlette.requests import Request
@@ -1312,8 +1314,9 @@ def benchmark(
         ray_cluster_address: Ray cluster address for run_mode="ray".
             "auto" (default) for head-node usage, or "ray://<ip>:10001"
             for remote Ray Client connection.
-        ray_shared_storage_path: Shared NFS path on worker nodes
-            (e.g., "/shared_nfs/magpie")
+        ray_shared_storage_path: Shared filesystem root on worker nodes (HF cache,
+            InferenceX, results; same mount on driver + workers). Default is
+            ``DEFAULT_SHARED_STORAGE_PATH`` from ``Magpie.modes.benchmark.config``.
         ray_num_gpus: Number of GPUs to request for the Ray job entrypoint (default: 0)
         ray_multi_node: Whether the benchmark needs multiple nodes (default: False)
         ray_total_num_gpus: Total GPUs across nodes for multi-node (default: 8)
@@ -1375,7 +1378,7 @@ def benchmark(
         if run_mode == "ray":
             ray_config_dict = {
                 "cluster_address": ray_cluster_address or "auto",
-                "shared_storage_path": ray_shared_storage_path or "/shared_nfs/magpie",
+                "shared_storage_path": ray_shared_storage_path or DEFAULT_SHARED_STORAGE_PATH,
                 "entrypoint_num_gpus": ray_num_gpus,
                 "multi_node": ray_multi_node,
                 "total_num_gpus": ray_total_num_gpus,
@@ -1893,18 +1896,35 @@ def compare_benchmark_reports(
 # =============================================================================
 
 _ray_executor_instance: Any = None
+_ray_executor_key: Optional[Tuple[str, str]] = None
 
 
-def _get_ray_executor(cluster_address: str = "auto") -> Any:
+def _get_ray_executor(
+    cluster_address: str = "auto",
+    shared_storage_path: str = DEFAULT_SHARED_STORAGE_PATH,
+) -> Any:
     """Return or lazily create a singleton RayJobExecutor for MCP tools."""
-    global _ray_executor_instance
-    if _ray_executor_instance is not None and _ray_executor_instance.is_running():
+    global _ray_executor_instance, _ray_executor_key
+    addr = cluster_address or "auto"
+    path = shared_storage_path or DEFAULT_SHARED_STORAGE_PATH
+    key = (addr, path)
+    if (
+        _ray_executor_instance is not None
+        and _ray_executor_key == key
+        and _ray_executor_instance.is_running()
+    ):
         return _ray_executor_instance
+    if _ray_executor_instance is not None:
+        try:
+            _ray_executor_instance.stop()
+        except Exception:
+            logger.debug("Stopping previous RayJobExecutor for MCP", exc_info=True)
     from ..core.ray_executor import RayJobExecutor
     from ..core.executor import ExecutorConfig, ExecutorType
     from ..modes.benchmark.config import RayConfig
-    rc = RayConfig(cluster_address=cluster_address)
+    rc = RayConfig(cluster_address=addr, shared_storage_path=path)
     cfg = ExecutorConfig(executor_type=ExecutorType.RAY)
+    _ray_executor_key = key
     _ray_executor_instance = RayJobExecutor(cfg, ray_config=rc)
     _ray_executor_instance.start()
     return _ray_executor_instance
@@ -1914,6 +1934,7 @@ def _get_ray_executor(cluster_address: str = "auto") -> Any:
 def ray_task_status(
     task_id: str,
     ray_cluster_address: str = "",
+    ray_shared_storage_path: str = "",
 ) -> str:
     """
     Check the status of a Ray-dispatched benchmark/analysis task.
@@ -1921,12 +1942,16 @@ def ray_task_status(
     Args:
         task_id: Magpie task ID returned by the benchmark tool
         ray_cluster_address: Ray cluster address ("auto" or "ray://<ip>:10001")
+        ray_shared_storage_path: Must match ``benchmark_batch`` shared-storage path
 
     Returns:
         JSON with task status (RUNNING, SUCCEEDED, FAILED, or UNKNOWN).
     """
     try:
-        executor = _get_ray_executor(ray_cluster_address or "auto")
+        executor = _get_ray_executor(
+            ray_cluster_address or "auto",
+            ray_shared_storage_path or DEFAULT_SHARED_STORAGE_PATH,
+        )
         status = executor.get_task_status_ray(task_id)
         return json.dumps({
             "task_id": task_id,
@@ -1944,6 +1969,7 @@ def ray_task_status(
 def ray_task_result(
     task_id: str,
     ray_cluster_address: str = "",
+    ray_shared_storage_path: str = "",
 ) -> str:
     """
     Retrieve the result of a completed Ray task.
@@ -1953,12 +1979,16 @@ def ray_task_result(
     Args:
         task_id: Magpie task ID
         ray_cluster_address: Ray cluster address
+        ray_shared_storage_path: Must match ``benchmark_batch`` shared-storage path
 
     Returns:
         JSON with the full benchmark/analysis result dict.
     """
     try:
-        executor = _get_ray_executor(ray_cluster_address or "auto")
+        executor = _get_ray_executor(
+            ray_cluster_address or "auto",
+            ray_shared_storage_path or DEFAULT_SHARED_STORAGE_PATH,
+        )
         result = executor.get_task_result(task_id)
         if result is None:
             status = executor.get_task_status_ray(task_id)
@@ -1981,6 +2011,7 @@ def ray_task_result(
 def ray_task_cancel(
     task_id: str,
     ray_cluster_address: str = "",
+    ray_shared_storage_path: str = "",
 ) -> str:
     """
     Cancel a running Ray task.
@@ -1988,12 +2019,16 @@ def ray_task_cancel(
     Args:
         task_id: Magpie task ID to cancel
         ray_cluster_address: Ray cluster address
+        ray_shared_storage_path: Must match ``benchmark_batch`` shared-storage path
 
     Returns:
         JSON with cancellation result.
     """
     try:
-        executor = _get_ray_executor(ray_cluster_address or "auto")
+        executor = _get_ray_executor(
+            ray_cluster_address or "auto",
+            ray_shared_storage_path or DEFAULT_SHARED_STORAGE_PATH,
+        )
         ok = executor.cancel_task(task_id)
         return json.dumps({
             "task_id": task_id,
@@ -2011,18 +2046,23 @@ def ray_task_cancel(
 @mcp.tool()
 def ray_task_list(
     ray_cluster_address: str = "",
+    ray_shared_storage_path: str = "",
 ) -> str:
     """
     List all tracked Ray tasks in this session with their status.
 
     Args:
         ray_cluster_address: Ray cluster address
+        ray_shared_storage_path: Must match ``benchmark_batch`` shared-storage path
 
     Returns:
         JSON with list of {task_id, status} entries.
     """
     try:
-        executor = _get_ray_executor(ray_cluster_address or "auto")
+        executor = _get_ray_executor(
+            ray_cluster_address or "auto",
+            ray_shared_storage_path or DEFAULT_SHARED_STORAGE_PATH,
+        )
         tasks = executor.list_tasks()
         jobs = [{"task_id": tid, "status": s} for tid, s in tasks.items()]
         return json.dumps({
@@ -2042,69 +2082,122 @@ def benchmark_batch(
     configs: List[Dict[str, Any]],
     ray_cluster_address: str = "",
     ray_shared_storage_path: str = "",
+    parallel: bool = False,
 ) -> str:
     """
-    Submit multiple independent benchmarks to a Ray cluster in parallel.
+    Submit multiple independent benchmarks to a Ray cluster.
 
-    Each config in the list becomes a separate Ray task running on a
-    different GPU worker.  Use ray_task_list and ray_task_status to track.
+    When ``parallel`` is False (default), each benchmark runs to completion
+    before the next starts (sequential). When ``parallel`` is True, each
+    config is submitted asynchronously via the shared MCP ``RayJobExecutor``;
+    use ``ray_task_list``, ``ray_task_status``, and ``ray_task_result`` to
+    track and retrieve outcomes.
 
     Args:
         configs: List of benchmark configuration dicts.  Each dict should have
             at least "framework" and "model".  Other fields default to the
             same values as the benchmark() tool.
         ray_cluster_address: Ray cluster address ("auto" or "ray://<ip>:10001")
-        ray_shared_storage_path: Shared NFS path on worker nodes
+        ray_shared_storage_path: Shared filesystem root on worker nodes (HF cache, results)
+        parallel: If True, submit all jobs without waiting (non-blocking).
+            If False, run benchmarks one after another until each finishes.
 
     Returns:
-        JSON with submitted job IDs and their initial status.
+        JSON with job entries and, for sequential mode, full run metadata;
+        for parallel mode, ``task_id`` / ``ray_job_id`` per job with
+        ``status``: ``SUBMITTED``.
     """
     from ..modes.benchmark import BenchmarkMode, BenchmarkConfig
-    from ..modes.benchmark.config import RayConfig
 
     try:
         if not configs:
             return json.dumps({"error": "configs list is empty"})
 
-        results = []
-        for i, cfg in enumerate(configs):
-            try:
-                # Ensure each config uses Ray mode
-                cfg["run_mode"] = "ray"
-                if "ray_config" not in cfg:
-                    cfg["ray_config"] = {
-                        "cluster_address": ray_cluster_address or "auto",
-                        "shared_storage_path": ray_shared_storage_path or "/shared_nfs/magpie",
-                    }
+        results: List[Dict[str, Any]] = []
+        addr = ray_cluster_address or "auto"
+        shared_storage_root = ray_shared_storage_path or DEFAULT_SHARED_STORAGE_PATH
 
-                benchmark_config = BenchmarkConfig.from_dict(cfg)
-                benchmarker = BenchmarkMode(
-                    config=benchmark_config,
-                    output_dir=cfg.get("output_dir", "./results"),
-                )
-                result = benchmarker.run()
-                result_dict = result.to_dict()
+        if parallel:
+            executor = _get_ray_executor(addr, shared_storage_root)
+            for i, raw in enumerate(configs):
+                try:
+                    cfg = dict(raw)
+                    cfg["run_mode"] = "ray"
+                    if "ray_config" not in cfg:
+                        cfg["ray_config"] = {
+                            "cluster_address": addr,
+                            "shared_storage_path": shared_storage_root,
+                        }
 
-                ray_job_id = (result.metadata or {}).get("ray_job_id", "unknown")
-                results.append({
-                    "index": i,
-                    "framework": cfg.get("framework"),
-                    "model": cfg.get("model"),
-                    "ray_job_id": ray_job_id,
-                    "status": "PENDING",
-                    "workspace_dir": result.workspace_dir,
-                })
+                    benchmark_config = BenchmarkConfig.from_dict(cfg)
+                    benchmarker = BenchmarkMode(
+                        config=benchmark_config,
+                        output_dir=cfg.get("output_dir", "./results"),
+                    )
+                    sub = benchmarker.submit_ray_benchmark(executor)
+                    tid = (sub.metadata or {}).get("task_id", "unknown")
+                    if sub.success:
+                        results.append({
+                            "index": i,
+                            "framework": cfg.get("framework"),
+                            "model": cfg.get("model"),
+                            "task_id": tid,
+                            "ray_job_id": tid,
+                            "status": "SUBMITTED",
+                            "submitted": True,
+                        })
+                    else:
+                        results.append({
+                            "index": i,
+                            "framework": cfg.get("framework"),
+                            "model": cfg.get("model"),
+                            "error": "; ".join(sub.errors) if sub.errors else "submit failed",
+                        })
+                except Exception as e:
+                    results.append({
+                        "index": i,
+                        "framework": raw.get("framework"),
+                        "model": raw.get("model"),
+                        "error": str(e),
+                    })
+        else:
+            for i, raw in enumerate(configs):
+                try:
+                    cfg = dict(raw)
+                    cfg["run_mode"] = "ray"
+                    if "ray_config" not in cfg:
+                        cfg["ray_config"] = {
+                            "cluster_address": addr,
+                            "shared_storage_path": shared_storage_root,
+                        }
 
-            except Exception as e:
-                results.append({
-                    "index": i,
-                    "framework": cfg.get("framework"),
-                    "model": cfg.get("model"),
-                    "error": str(e),
-                })
+                    benchmark_config = BenchmarkConfig.from_dict(cfg)
+                    benchmarker = BenchmarkMode(
+                        config=benchmark_config,
+                        output_dir=cfg.get("output_dir", "./results"),
+                    )
+                    result = benchmarker.run()
+                    ray_job_id = (result.metadata or {}).get("ray_job_id", "unknown")
+                    results.append({
+                        "index": i,
+                        "framework": cfg.get("framework"),
+                        "model": cfg.get("model"),
+                        "ray_job_id": ray_job_id,
+                        "status": "PENDING",
+                        "workspace_dir": result.workspace_dir,
+                    })
+                except Exception as e:
+                    results.append({
+                        "index": i,
+                        "framework": raw.get("framework"),
+                        "model": raw.get("model"),
+                        "error": str(e),
+                    })
 
+        ok = [r for r in results if "error" not in r]
         return json.dumps({
-            "submitted": len([r for r in results if "ray_job_id" in r]),
+            "parallel": parallel,
+            "submitted": len(ok),
             "failed": len([r for r in results if "error" in r]),
             "jobs": results,
         }, indent=2)

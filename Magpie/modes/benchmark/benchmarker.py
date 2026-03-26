@@ -14,8 +14,13 @@ import os
 import shutil
 import subprocess
 import time
+import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ...core.ray_executor import RayJobExecutor
+    from ...core.task import Task
 
 from .config import BenchmarkConfig
 from .image_selector import ImageSelector
@@ -76,7 +81,7 @@ class BenchmarkMode:
         
         logger.info(f"Starting benchmark: {self.config.framework} / {self.config.model}")
         
-        # Ray mode: delegate to remote cluster and return immediately
+        # Ray mode: delegate to remote cluster and return when complete
         if self.config.is_ray:
             return self._execute_ray_benchmark()
         
@@ -815,6 +820,75 @@ class BenchmarkMode:
             logger.exception(f"Gap analysis failed: {e}")
             return {"enabled": True, "error": str(e)}
     
+    def _build_ray_benchmark_task(self) -> Tuple[Optional["Task"], Optional[str]]:
+        """Build the ``Task`` for a Ray benchmark; sets ``self._task_id`` if unset."""
+        from ...core.task import Task, ModeType, ModeConfig
+
+        if self.config.ray_config is None:
+            return None, "ray_config is required when run_mode='ray'"
+
+        t_id = self._task_id or f"bench_{uuid.uuid4().hex[:12]}"
+        self._task_id = t_id
+
+        mode_config = ModeConfig(
+            mode_type=ModeType.BENCHMARK,
+            gpu_arch=self.config.gpu_arch,
+            timeout_seconds=self.config.timeout_seconds,
+            benchmark_config=self.config.to_dict(),
+        )
+        task = Task(
+            kernel_configs=[],
+            mode_config=mode_config,
+            task_id=t_id,
+        )
+        return task, None
+
+    def submit_ray_benchmark(self, executor: "RayJobExecutor") -> BenchmarkResult:
+        """
+        Submit a Ray benchmark without waiting for completion.
+
+        The remote task runs asynchronously; poll with MCP ``ray_task_*``
+        tools using the returned ``task_id``.
+
+        Args:
+            executor: A **started** ``RayJobExecutor`` (e.g. MCP singleton).
+
+        Returns:
+            ``BenchmarkResult`` with ``metadata`` containing ``task_id``,
+            ``ray_job_id``, and ``submitted: True`` on success.
+        """
+        result = BenchmarkResult()
+        result.framework = self.config.framework
+        result.model = self.config.model
+
+        if not self.config.is_ray:
+            result.success = False
+            result.errors.append("submit_ray_benchmark requires run_mode='ray'")
+            return result
+
+        task, err = self._build_ray_benchmark_task()
+        if err:
+            result.success = False
+            result.errors.append(err)
+            return result
+
+        try:
+            assert task is not None
+            tid = executor.submit(task)
+            logger.info(f"Submitted Ray benchmark task {tid} (async)")
+            result.success = True
+            result.metadata = {
+                "task_id": tid,
+                "ray_job_id": tid,
+                "submitted": True,
+            }
+            return result
+        except Exception as e:
+            result.success = False
+            result.errors.append(f"Ray submit failed: {e}")
+            logger.exception(f"submit_ray_benchmark failed: {e}")
+            return result
+
     def _execute_ray_benchmark(self) -> BenchmarkResult:
         """
         Submit benchmark to a remote Ray cluster.
@@ -825,7 +899,6 @@ class BenchmarkMode:
         """
         from ...core.ray_executor import RayJobExecutor
         from ...core.executor import ExecutorConfig, ExecutorType
-        from ...core.task import Task, ModeType, ModeConfig
 
         result = BenchmarkResult()
         rc = self.config.ray_config
@@ -834,6 +907,8 @@ class BenchmarkMode:
             result.errors.append("ray_config is required when run_mode='ray'")
             return result
 
+        executor = None
+        executor_started = False
         try:
             executor_config = ExecutorConfig(
                 executor_type=ExecutorType.RAY,
@@ -842,24 +917,21 @@ class BenchmarkMode:
             executor = RayJobExecutor(executor_config, ray_config=rc)
 
             if not executor.start():
+                executor.stop()
                 result.success = False
                 result.errors.append(
                     f"Failed to connect to Ray cluster at {rc.cluster_address}"
                 )
                 return result
 
-            # Build a Magpie Task wrapping the benchmark config
-            mode_config = ModeConfig(
-                mode_type=ModeType.BENCHMARK,
-                gpu_arch=self.config.gpu_arch,
-                timeout_seconds=self.config.timeout_seconds,
-                benchmark_config=self.config.to_dict(),
-            )
-            task = Task(
-                kernel_configs=[],
-                mode_config=mode_config,
-                task_id=self._task_id,
-            )
+            executor_started = True
+
+            task, err = self._build_ray_benchmark_task()
+            if err:
+                result.success = False
+                result.errors.append(err)
+                return result
+            assert task is not None
 
             logger.info(f"Dispatching benchmark to Ray GPU worker (task={self._task_id})...")
             task_result = executor.execute(task)
@@ -871,27 +943,21 @@ class BenchmarkMode:
             if task_result.status.value == "completed" and task_result.results:
                 self._populate_result_from_ray(result, task_result.results, rc)
             else:
-                nfs_result = self._try_recover_from_nfs(rc)
-                if nfs_result:
-                    logger.info("Recovered benchmark result from NFS after Ray failure")
-                    return nfs_result
                 result.success = False
                 result.errors = task_result.errors or ["Ray task failed"]
                 result.metadata = {"task_id": self._task_id}
 
-            executor.stop()
             logger.info(f"Ray benchmark task {self._task_id} finished: {task_result.status.value}")
             return result
 
         except Exception as e:
-            nfs_result = self._try_recover_from_nfs(rc)
-            if nfs_result:
-                logger.info("Recovered benchmark result from NFS after exception")
-                return nfs_result
             result.success = False
             result.errors.append(f"Ray submission failed: {e}")
             logger.exception(f"Ray benchmark submission failed: {e}")
             return result
+        finally:
+            if executor_started and executor is not None:
+                executor.stop()
 
     def _populate_result_from_ray(
         self, result: BenchmarkResult, ray_result: dict, rc
@@ -937,59 +1003,6 @@ class BenchmarkMode:
             "task_id": self._task_id,
             "ray_cluster": rc.cluster_address,
         }
-
-    def _try_recover_from_nfs(self, rc) -> Optional[BenchmarkResult]:
-        """Try to read benchmark results directly from NFS.
-
-        When the Ray head node restarts mid-benchmark, ``ray.get()``
-        fails but the worker may still complete.  This polls the NFS
-        results directory for the ``inferencex_result.json`` file that
-        the worker writes, allowing recovery without a working Ray
-        connection.
-        """
-        import glob as globmod
-
-        shared = rc.shared_storage_path if rc else "/shared_nfs/magpie"
-        results_base = Path(shared) / "results" / self._task_id
-
-        if not results_base.exists():
-            return None
-
-        logger.info(
-            f"Ray connection lost. Polling NFS for results at {results_base} "
-            f"(timeout={self.config.timeout_seconds}s)..."
-        )
-
-        deadline = time.time() + self.config.timeout_seconds
-        poll_interval = 30
-
-        while time.time() < deadline:
-            result_files = list(results_base.glob("*/inferencex_result.json"))
-            if result_files:
-                result_file = result_files[0]
-                workspace = result_file.parent
-                logger.info(f"Found result on NFS: {result_file}")
-
-                parsed = ResultParser.parse_inferencex_result(
-                    result_file,
-                    framework=self.config.framework,
-                    model=self.config.model,
-                )
-                parsed.workspace_dir = str(workspace)
-                parsed.metadata = {
-                    "task_id": self._task_id,
-                    "recovered_from": "nfs",
-                }
-                return parsed
-
-            logger.info(
-                f"No result yet, retrying in {poll_interval}s... "
-                f"({int(deadline - time.time())}s remaining)"
-            )
-            time.sleep(poll_interval)
-
-        logger.warning(f"NFS recovery timed out for task {self._task_id}")
-        return None
 
     def cleanup(self) -> None:
         """Clean up resources."""

@@ -27,6 +27,7 @@ from .executor import (
     create_executor,
 )
 from ..config import KernelEvalConfig
+from ..modes.benchmark.config import DEFAULT_SHARED_STORAGE_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ class SchedulerConfig:
     gpu_devices: List[int] = field(default_factory=lambda: [0])
     timeout_seconds: float = 300.0
     ray_cluster_address: Optional[str] = None
-    ray_shared_storage_path: Optional[str] = None
+    ray_shared_storage_path: Optional[str] = None  # shared FS root on Ray workers
     pre_hooks: List[Callable[[Task], None]] = field(default_factory=list)
     post_hooks: List[Callable[[Task, TaskResult], None]] = field(default_factory=list)
 
@@ -118,7 +119,10 @@ class Scheduler:
             from ..modes.benchmark.config import RayConfig
             extra_kwargs["ray_config"] = RayConfig(
                 cluster_address=self.config.ray_cluster_address or "auto",
-                shared_storage_path=self.config.ray_shared_storage_path or "/shared_nfs/magpie",
+                shared_storage_path=(
+                    self.config.ray_shared_storage_path
+                    or DEFAULT_SHARED_STORAGE_PATH
+                ),
             )
         self._executor = create_executor(executor_config, **extra_kwargs)
 
@@ -625,7 +629,7 @@ class Scheduler:
         self,
         benchmark_config: Dict[str, Any],
         ray_cluster_address: str = "auto",
-        ray_shared_storage_path: str = "/shared_nfs/magpie",
+        ray_shared_storage_path: str = DEFAULT_SHARED_STORAGE_PATH,
         gpu_arch: Optional[str] = None,
         timeout_seconds: float = 3600.0,
     ) -> TaskResult:
@@ -638,7 +642,7 @@ class Scheduler:
         Args:
             benchmark_config: Benchmark configuration dict
             ray_cluster_address: Ray head address
-            ray_shared_storage_path: Shared NFS path
+            ray_shared_storage_path: Shared filesystem root on workers (HF cache, results)
             gpu_arch: GPU architecture
             timeout_seconds: Timeout
 

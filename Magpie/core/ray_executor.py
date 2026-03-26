@@ -19,7 +19,6 @@ from typing import Any, Dict, List, Optional
 
 from .executor import BaseExecutor, ExecutorConfig
 from .task import Task, TaskResult, TaskStatus
-from .job_store import JobStore, JobRecord
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +40,6 @@ class RayJobExecutor(BaseExecutor):
         super().__init__(config)
         self._ray_config = ray_config
         self._ray_inited = False
-        self._job_store: Optional[JobStore] = None
         # task_id -> ray.ObjectRef
         self._obj_refs: Dict[str, Any] = {}
         # task_id -> cached result (filled after ray.get)
@@ -84,9 +82,6 @@ class RayJobExecutor(BaseExecutor):
 
     def stop(self) -> None:
         """Release resources and disconnect from Ray."""
-        if self._job_store:
-            self._job_store.close()
-            self._job_store = None
         self._obj_refs.clear()
         self._results_cache.clear()
         self._pending_tasks.clear()
@@ -339,11 +334,18 @@ class RayJobExecutor(BaseExecutor):
 
         rc = self._ray_config
 
+        merged_ray: Dict[str, Any] = dict(rc.to_dict())
+        bc = getattr(task.mode_config, "benchmark_config", None)
+        if isinstance(bc, dict):
+            br = bc.get("ray_config")
+            if isinstance(br, dict):
+                merged_ray.update(br)
+
         job_payload = {
             "task_id": task.task_id,
             "mode_type": task.mode_config.mode_type.value,
             "mode_config": task.to_dict()["mode_config"],
-            "ray_config": rc.to_dict(),
+            "ray_config": merged_ray,
         }
 
         runtime_env = self._build_runtime_env()
