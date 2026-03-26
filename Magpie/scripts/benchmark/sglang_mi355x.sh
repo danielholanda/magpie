@@ -8,6 +8,7 @@
 # Magpie Generic SGLang Benchmark Script for MI355X
 
 source "$(dirname "$0")/benchmark_lib.sh"
+source "$(dirname "$0")/server_cleanup.sh"
 
 check_env_vars \
     MODEL \
@@ -38,16 +39,18 @@ SERVER_LOG=${SERVER_LOG:-/workspace/server.log}
 PORT=${PORT:-8888}
 
 set -x
-python3 -m sglang.launch_server \
+setsid python3 -m sglang.launch_server \
   --model-path=$MODEL \
   --host=0.0.0.0 \
   --port=$PORT \
   --trust-remote-code \
   --tensor-parallel-size=$TP \
   --mem-fraction-static=0.8 \
-  --disable-radix-cache > $SERVER_LOG 2>&1 &
+  --disable-radix-cache \
+  $EXTRA_SGLANG_ARGS > $SERVER_LOG 2>&1 &
 
 SERVER_PID=$!
+trap 'magpie_stop_benchmark_server_stack "$SERVER_PID"' EXIT INT TERM
 
 # Wait for server to be ready
 wait_for_server_ready --port "$PORT" --server-log "$SERVER_LOG" --server-pid "$SERVER_PID"

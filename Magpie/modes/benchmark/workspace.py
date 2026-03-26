@@ -30,7 +30,7 @@ class WorkspaceManager:
     - config.yaml: Configuration snapshot
     - torch_trace/: PyTorch profiler output
     - system_profile/: System profiler output (rocprof/ncu)
-    - inferencemax_result.json: InferenceMAX raw output
+    - inferencex_result.json: InferenceX raw output
     - server.log: Server logs
     - benchmark_report.json: Magpie summary report
     """
@@ -111,7 +111,7 @@ class WorkspaceManager:
             return self._workspace_path / "system_profile"
         return None
     
-    def get_result_file_path(self, filename: str = "inferencemax_result.json") -> Optional[Path]:
+    def get_result_file_path(self, filename: str = "inferencex_result.json") -> Optional[Path]:
         """Get path for a result file in workspace."""
         if self._workspace_path:
             return self._workspace_path / filename
@@ -169,18 +169,18 @@ class WorkspaceManager:
         
         results = {
             "workspace_path": str(self._workspace_path),
-            "inferencemax_result": None,
+            "inferencex_result": None,
             "torch_trace_files": [],
             "system_profile_files": [],
             "server_log": None,
         }
         
         # Read benchmark result
-        result_file = self._workspace_path / "inferencemax_result.json"
+        result_file = self._workspace_path / "inferencex_result.json"
         if result_file.exists():
             try:
                 with open(result_file, 'r') as f:
-                    results["inferencemax_result"] = json.load(f)
+                    results["inferencex_result"] = json.load(f)
             except Exception as e:
                 logger.warning(f"Failed to read benchmark result: {e}")
         

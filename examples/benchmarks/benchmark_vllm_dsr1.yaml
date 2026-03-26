@@ -11,22 +11,23 @@
 
 benchmark:
   framework: vllm
-  model: deepseek-ai/DeepSeek-R1-0528
+  model: /shared_nfs/Llamas/huggingface/DeepSeek-R1-0528
   precision: fp8
+  run_mode: local
   
   # Environment variables
   envs:
     TP: 8
     CONC: 32
-    ISL: 1024
-    OSL: 1024
-    RANDOM_RANGE_RATIO: 1
-    MAX_MODEL_LEN: 131072
+    ISL: 128
+    OSL: 128
+    RANDOM_RANGE_RATIO: 0.8
+    MAX_MODEL_LEN: 4090
     
   # Profiler configuration
   profiler:
     torch_profiler:
-      enabled: true
+      enabled: false
     system_profiler:
       enabled: false
       
@@ -36,8 +37,8 @@ benchmark:
     trace_end_pct: 80
     top_k: 20
 
-  # Will auto-clone InferenceMAX if not specified
-  # inferencemax_path: ""
+  # Will auto-clone InferenceX if not specified
+  # inferencex_path: ""
   
   # Auto-detect: will use Magpie generic script
   

@@ -27,6 +27,7 @@ from .executor import (
     create_executor,
 )
 from ..config import KernelEvalConfig
+from ..modes.benchmark.config import DEFAULT_SHARED_STORAGE_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ class EnvironmentType(Enum):
 
     LOCAL = "local"
     CONTAINER = "container"
-    # Future: DISTRIBUTED = "distributed"
+    RAY = "ray"
 
 
 @dataclass
@@ -59,6 +60,8 @@ class SchedulerConfig:
     docker_image: Optional[str] = None
     gpu_devices: List[int] = field(default_factory=lambda: [0])
     timeout_seconds: float = 300.0
+    ray_cluster_address: Optional[str] = None
+    ray_shared_storage_path: Optional[str] = None  # shared FS root on Ray workers
     pre_hooks: List[Callable[[Task], None]] = field(default_factory=list)
     post_hooks: List[Callable[[Task, TaskResult], None]] = field(default_factory=list)
 
@@ -110,8 +113,18 @@ class Scheduler:
         # Create executor config
         executor_config = self._create_executor_config()
 
-        # Create executor
-        self._executor = create_executor(executor_config)
+        # Create executor (pass ray_config for RAY environment)
+        extra_kwargs: Dict[str, Any] = {}
+        if self.config.environment_type == EnvironmentType.RAY:
+            from ..modes.benchmark.config import RayConfig
+            extra_kwargs["ray_config"] = RayConfig(
+                cluster_address=self.config.ray_cluster_address or "auto",
+                shared_storage_path=(
+                    self.config.ray_shared_storage_path
+                    or DEFAULT_SHARED_STORAGE_PATH
+                ),
+            )
+        self._executor = create_executor(executor_config, **extra_kwargs)
 
         # Start executor
         if not self._executor.start():
@@ -128,6 +141,8 @@ class Scheduler:
             executor_type = ExecutorType.LOCAL
         elif self.config.environment_type == EnvironmentType.CONTAINER:
             executor_type = ExecutorType.CONTAINER
+        elif self.config.environment_type == EnvironmentType.RAY:
+            executor_type = ExecutorType.RAY
         else:
             executor_type = ExecutorType.LOCAL
 
@@ -375,7 +390,8 @@ class Scheduler:
         if task_id in self._completed_tasks:
             return self._completed_tasks[task_id]
 
-        if isinstance(self._executor, LocalExecutor):
+        # Both LocalExecutor and RayJobExecutor support wait_for_task
+        if self._executor and hasattr(self._executor, "wait_for_task"):
             result = self._executor.wait_for_task(task_id, timeout)
 
             # Find task and run post-hooks
@@ -401,7 +417,7 @@ class Scheduler:
         """
         results = []
 
-        if isinstance(self._executor, LocalExecutor):
+        if self._executor and hasattr(self._executor, "wait_all"):
             results = self._executor.wait_all(timeout)
 
             # Run post-hooks for all tasks
@@ -577,7 +593,7 @@ class Scheduler:
         Run benchmark mode.
 
         Benchmark mode always uses container environment for execution.
-        Uses InferenceMAX as backend for vLLM/SGLang benchmarks.
+        Uses InferenceX as backend for vLLM/SGLang benchmarks.
 
         Args:
             benchmark_config: Benchmark configuration dict containing:
@@ -608,6 +624,58 @@ class Scheduler:
             benchmark_config=benchmark_config,
         )
         return self.execute(task)
+
+    def run_benchmark_ray(
+        self,
+        benchmark_config: Dict[str, Any],
+        ray_cluster_address: str = "auto",
+        ray_shared_storage_path: str = DEFAULT_SHARED_STORAGE_PATH,
+        gpu_arch: Optional[str] = None,
+        timeout_seconds: float = 3600.0,
+    ) -> TaskResult:
+        """
+        Submit a benchmark to a remote Ray cluster.
+
+        Unlike run_benchmark() which blocks, this submits asynchronously
+        and returns a TaskResult whose metadata contains the task_id.
+
+        Args:
+            benchmark_config: Benchmark configuration dict
+            ray_cluster_address: Ray head address
+            ray_shared_storage_path: Shared filesystem root on workers (HF cache, results)
+            gpu_arch: GPU architecture
+            timeout_seconds: Timeout
+
+        Returns:
+            TaskResult with task_id in metadata
+        """
+        benchmark_config["run_mode"] = "ray"
+        benchmark_config["ray_config"] = {
+            "cluster_address": ray_cluster_address,
+            "shared_storage_path": ray_shared_storage_path,
+        }
+
+        task = self.create_task(
+            kernel_configs=[],
+            mode_type=ModeType.BENCHMARK,
+            gpu_arch=gpu_arch,
+            timeout_seconds=timeout_seconds,
+            benchmark_config=benchmark_config,
+        )
+
+        # For Ray, we use BenchmarkMode directly (it handles its own executor)
+        from ..modes.benchmark import BenchmarkMode, BenchmarkConfig
+        config = BenchmarkConfig.from_dict(benchmark_config)
+        benchmarker = BenchmarkMode(config)
+        bench_result = benchmarker.run(task_id=task.task_id)
+
+        return TaskResult(
+            task_id=task.task_id,
+            status=TaskStatus.COMPLETED if bench_result.success else TaskStatus.FAILED,
+            results=bench_result.to_dict(),
+            errors=bench_result.errors,
+            metadata=bench_result.metadata or {},
+        )
 
     def get_task_status(self, task_id: str) -> Optional[TaskStatus]:
         """

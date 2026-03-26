@@ -13,19 +13,25 @@ This module provides:
 """
 
 from .config import (
-    BenchmarkConfig, BenchmarkRunMode, ProfilerConfig, TorchProfilerConfig,
-    SystemProfilerConfig, GapAnalysisConfig,
+    BenchmarkConfig,
+    BenchmarkRunMode,
+    DEFAULT_SHARED_STORAGE_PATH,
+    ProfilerConfig,
+    TorchProfilerConfig,
+    SystemProfilerConfig,
+    GapAnalysisConfig,
 )
 from .benchmarker import BenchmarkMode
 from .result import BenchmarkResult
 from .workspace import WorkspaceManager
 from .image_selector import ImageSelector
-from .inferencemax import InferenceMAXManager, ensure_inferencemax_available
+from .inferencex import InferenceXManager, ensure_inferencex_available
 from .gap_analysis import GapAnalyzer, GapAnalysisResult
 
 __all__ = [
     "BenchmarkMode",
     "BenchmarkConfig",
+    "DEFAULT_SHARED_STORAGE_PATH",
     "BenchmarkResult",
     "ProfilerConfig",
     "TorchProfilerConfig",
@@ -35,8 +41,8 @@ __all__ = [
     "GapAnalysisResult",
     "WorkspaceManager",
     "ImageSelector",
-    "InferenceMAXManager",
-    "ensure_inferencemax_available",
+    "InferenceXManager",
+    "ensure_inferencex_available",
 ]
 
 

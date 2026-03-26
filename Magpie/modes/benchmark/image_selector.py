@@ -121,7 +121,7 @@ class ImageSelector:
     
     def get_runner_type(self, gpu_arch: Optional[str] = None) -> str:
         """
-        Get InferenceMAX runner type based on GPU architecture.
+        Get InferenceX runner type based on GPU architecture.
         
         Args:
             gpu_arch: GPU architecture. Auto-detected if not specified.

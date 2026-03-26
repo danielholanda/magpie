@@ -8,7 +8,7 @@ Core evaluation engine components.
 
 This module provides:
 - Scheduler: Task scheduling and executor management
-- Executor: Task execution (Local, Container, future: Distributed)
+- Executor: Task execution (Local, Container, Ray)
 - Task: Task and result definitions
 """
 
@@ -32,6 +32,7 @@ from .scheduler import (
     SchedulerConfig,
     EnvironmentType,
 )
+from .job_store import JobStore, JobRecord
 
 __all__ = [
     # Task definitions
@@ -51,4 +52,7 @@ __all__ = [
     "Scheduler",
     "SchedulerConfig",
     "EnvironmentType",
+    # Ray job persistence
+    "JobStore",
+    "JobRecord",
 ]

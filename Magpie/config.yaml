@@ -190,10 +190,10 @@ benchmark:
   # Path to separate image mapping configuration file
   image_config: "./benchmark_images.yaml"
   
-  # Path to InferenceMAX installation
-  # If not configured or path doesn't exist, InferenceMAX will be auto-cloned from:
+  # Path to InferenceX installation
+  # If not configured or path doesn't exist, InferenceX will be auto-cloned from:
   # https://github.com/SemiAnalysisAI/InferenceX.git
-  inferencemax_path: ""
+  inferencex_path: ""
   
   # Default timeout for benchmark tasks
   timeout_seconds: 3600

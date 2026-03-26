@@ -87,6 +87,7 @@ dmypy.json
 # Evaluation results output
 results/
 InferenceMAX/
+InferenceX/
 
 # Compiled kernel binaries
 *.out

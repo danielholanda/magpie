@@ -71,17 +71,19 @@ def parse_kernel_type(type_str: str) -> KernelType:
 
 def load_kernel_config(
     kernel_config_path: Path,
-) -> tuple[List[KernelEvalConfig], Dict[str, Any], Dict[str, Any]]:
+) -> tuple[List[KernelEvalConfig], Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
     """
     Load kernel configuration from YAML file.
 
-    The YAML may optionally contain ``performance:`` and ``correctness:``
-    sections that override the framework-level settings.
+    The YAML may optionally contain:
+    - ``performance:`` — overrides framework-level profiler settings
+    - ``correctness:`` — overrides framework-level correctness settings
+    - ``ray_config:`` — Ray cluster settings (implies ``environment: ray``)
+    - ``scheduler:`` — scheduler-level overrides (environment, workers, …)
 
     Returns:
-        Tuple of (list of KernelEvalConfig, performance overrides dict,
-        correctness overrides dict).  Override dicts are empty when the
-        corresponding section is absent.
+        Tuple of (kernel configs, performance overrides, correctness overrides,
+        scheduler overrides). Override dicts are empty when absent.
     """
     data = load_yaml(kernel_config_path)
     configs = []
@@ -102,10 +104,14 @@ def load_kernel_config(
     # Performance overrides (optional section in kernel config)
     perf_overrides = _expand_env_vars(data.get("performance", {}))
 
-    # Correctness overrides (optional section in kernel config)
     corr_overrides = _expand_env_vars(data.get("correctness", {}))
 
-    return configs, perf_overrides, corr_overrides
+    sched_overrides: Dict[str, Any] = dict(data.get("scheduler", {}))
+    if "ray_config" in data:
+        sched_overrides["ray_config"] = data["ray_config"]
+        sched_overrides.setdefault("environment", "ray")
+
+    return configs, perf_overrides, corr_overrides, sched_overrides
 
 
 def _parse_command_list(cmd_entry) -> Optional[List]:
@@ -410,22 +416,35 @@ def _get_compare_config(config: Dict[str, Any]) -> Dict[str, Any]:
     return config.get("compare", {})
 
 
-def _get_scheduler_config(config: Dict[str, Any], args) -> SchedulerConfig:
+def _get_scheduler_config(
+    config: Dict[str, Any],
+    args,
+    sched_overrides: Optional[Dict[str, Any]] = None,
+) -> SchedulerConfig:
     """
-    Get scheduler configuration from framework config and CLI args.
+    Get scheduler configuration from framework config, CLI args, and
+    optional per-YAML scheduler overrides.
+
+    Priority (highest → lowest):
+        CLI args  >  kernel-config YAML overrides  >  framework config.yaml
 
     Args:
         config: Framework config dict
         args: CLI arguments
+        sched_overrides: Scheduler overrides from kernel config YAML
+            (may contain ``environment``, ``ray_config``, ``max_workers``, …)
 
     Returns:
         SchedulerConfig
     """
     sched_cfg = config.get("scheduler", {})
+    overrides = sched_overrides or {}
 
-    # Determine environment type
-    env_type_str = getattr(args, "environment", None) or sched_cfg.get(
-        "environment", "local"
+    # Determine environment type: CLI > YAML override > framework config
+    env_type_str = (
+        getattr(args, "environment", None)
+        or overrides.get("environment")
+        or sched_cfg.get("environment", "local")
     )
     env_type = EnvironmentType(env_type_str.lower())
 
@@ -438,11 +457,18 @@ def _get_scheduler_config(config: Dict[str, Any], args) -> SchedulerConfig:
     # Get docker image
     docker_image = getattr(args, "docker_image", None) or sched_cfg.get("docker_image")
 
+    # Ray settings from YAML ray_config section
+    ray_cfg = overrides.get("ray_config", {})
+    ray_cluster_address = ray_cfg.get("cluster_address")
+    ray_shared_storage_path = ray_cfg.get("shared_storage_path")
+
     return SchedulerConfig(
         environment_type=env_type,
         max_workers=max_workers,
         gpu_devices=gpu_devices,
         docker_image=docker_image,
+        ray_cluster_address=ray_cluster_address,
+        ray_shared_storage_path=ray_shared_storage_path,
     )
 
 
@@ -452,11 +478,12 @@ def run_analyze(args, config: Dict[str, Any]) -> int:
     kernel_configs = []
     perf_overrides: Dict[str, Any] = {}
     corr_overrides: Dict[str, Any] = {}
+    sched_overrides: Dict[str, Any] = {}
 
     if args.kernel_config:
         # Load from kernel config file
-        kernel_configs, perf_overrides, corr_overrides = load_kernel_config(
-            args.kernel_config
+        kernel_configs, perf_overrides, corr_overrides, sched_overrides = (
+            load_kernel_config(args.kernel_config)
         )
         if not kernel_configs:
             logger.error(f"No kernels found in {args.kernel_config}")
@@ -516,8 +543,7 @@ def run_analyze(args, config: Dict[str, Any]) -> int:
 
     corr_settings["workspace_path"] = str(ws_path)
 
-    # Create scheduler
-    scheduler_config = _get_scheduler_config(config, args)
+    scheduler_config = _get_scheduler_config(config, args, sched_overrides)
     scheduler = Scheduler(scheduler_config)
 
     if not scheduler.initialize():
@@ -538,14 +564,21 @@ def run_analyze(args, config: Dict[str, Any]) -> int:
             correctness_config=corr_settings,
         )
 
+        # Unwrap Ray result format: {'task_id': ..., 'results': [...]}
+        raw = result.results
+        if isinstance(raw, dict) and "results" in raw:
+            eval_states = raw["results"]
+        else:
+            eval_states = raw
+
         # Print and save results
-        if result.success and result.results:
-            for kernel_cfg, state in zip(kernel_configs, result.results):
+        if result.success and eval_states:
+            for kernel_cfg, state in zip(kernel_configs, eval_states):
                 if isinstance(state, dict):
                     state = _dict_to_eval_state(state)
                 _print_result(kernel_cfg, state)
 
-            _save_results(result.results, ws_path, "analyze")
+            _save_results(eval_states, ws_path, "analyze")
             print(f"\nWorkspace: {ws_path}")
         else:
             logger.error(f"Analysis failed: {result.errors}")
@@ -553,7 +586,7 @@ def run_analyze(args, config: Dict[str, Any]) -> int:
 
         # Count failures
         failed = 0
-        for state in result.results:
+        for state in eval_states:
             if isinstance(state, dict):
                 correctness = state.get("correctness_state", "UNKNOWN")
                 if correctness != "SUCCESS":
@@ -574,10 +607,11 @@ def run_compare(args, config: Dict[str, Any]) -> int:
     kernel_configs = []
     perf_overrides: Dict[str, Any] = {}
     corr_overrides: Dict[str, Any] = {}
+    sched_overrides: Dict[str, Any] = {}
 
     if args.kernel_config:
-        kernel_configs, perf_overrides, corr_overrides = load_kernel_config(
-            args.kernel_config
+        kernel_configs, perf_overrides, corr_overrides, sched_overrides = (
+            load_kernel_config(args.kernel_config)
         )
     elif args.kernels:
         kernel_type = parse_kernel_type(args.type)
@@ -626,8 +660,7 @@ def run_compare(args, config: Dict[str, Any]) -> int:
 
     corr_settings["workspace_path"] = str(ws_path)
 
-    # Create scheduler
-    scheduler_config = _get_scheduler_config(config, args)
+    scheduler_config = _get_scheduler_config(config, args, sched_overrides)
     scheduler = Scheduler(scheduler_config)
 
     if not scheduler.initialize():
@@ -953,7 +986,7 @@ def run_benchmark(args, config: Dict[str, Any]) -> int:
                 },
             },
             "docker_image": args.docker_image,
-            "inferencemax_path": args.inferencemax_path,
+            "inferencex_path": args.inferencex_path,
             "benchmark_script": args.benchmark_script,
             "timeout_seconds": args.timeout,
         }
@@ -974,8 +1007,8 @@ def run_benchmark(args, config: Dict[str, Any]) -> int:
     bench_settings = config.get("benchmark", {})
     
     # Merge with framework config defaults (auto-clone handled in BenchmarkMode)
-    if "inferencemax_path" not in benchmark_cfg or not benchmark_cfg["inferencemax_path"]:
-        benchmark_cfg["inferencemax_path"] = bench_settings.get("inferencemax_path", "")
+    if "inferencex_path" not in benchmark_cfg or not benchmark_cfg["inferencex_path"]:
+        benchmark_cfg["inferencex_path"] = bench_settings.get("inferencex_path", "")
     
     # Create benchmark config object
     try:
@@ -1036,7 +1069,7 @@ def create_parser() -> argparse.ArgumentParser:
         "--environment",
         "-e",
         type=str,
-        choices=["local", "container"],
+        choices=["local", "container", "ray"],
         help="Execution environment (default: local)",
     )
     parser.add_argument(
@@ -1164,13 +1197,13 @@ def create_parser() -> argparse.ArgumentParser:
         "--docker-image", type=str, help="Override Docker image"
     )
     benchmark_parser.add_argument(
-        "--inferencemax-path", type=str,
+        "--inferencex-path", type=str,
         default="",
-        help="Path to InferenceMAX installation (auto-cloned if not specified)"
+        help="Path to InferenceX installation (auto-cloned if not specified)"
     )
     benchmark_parser.add_argument(
         "--benchmark-script", type=str,
-        help="InferenceMAX benchmark script name"
+        help="InferenceX benchmark script name"
     )
     benchmark_parser.add_argument(
         "--timeout", type=int, default=3600, help="Benchmark timeout in seconds"

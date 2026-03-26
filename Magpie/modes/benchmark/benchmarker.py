@@ -6,7 +6,7 @@
 """
 Core benchmarker for benchmark mode.
 
-Orchestrates benchmark execution using InferenceMAX as backend.
+Orchestrates benchmark execution using InferenceX as backend.
 """
 
 import logging
@@ -14,14 +14,19 @@ import os
 import shutil
 import subprocess
 import time
+import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ...core.ray_executor import RayJobExecutor
+    from ...core.task import Task
 
 from .config import BenchmarkConfig
 from .image_selector import ImageSelector
-from .inferencemax import ensure_inferencemax_available
+from .inferencex import ensure_inferencex_available
 from .workspace import WorkspaceManager
-from .result import BenchmarkResult, ResultParser
+from .result import BenchmarkResult, LatencyMetrics, ResultParser, ThroughputMetrics
 from .tracelens import TraceLensAnalyzer
 
 from ...utils.gpu import detect_gpu, GPUVendor
@@ -33,9 +38,10 @@ class BenchmarkMode:
     """
     Benchmark mode for framework-level profiling.
     
-    Uses InferenceMAX as backend to run vLLM/SGLang benchmarks
-    either inside Docker containers (run_mode=docker) or directly
-    on the host (run_mode=local).
+    Uses InferenceX as backend to run vLLM/SGLang benchmarks
+    either inside Docker containers (run_mode=docker), directly
+    on the host (run_mode=local), or on a remote Ray cluster
+    (run_mode=ray).
     """
     
     def __init__(
@@ -75,19 +81,23 @@ class BenchmarkMode:
         
         logger.info(f"Starting benchmark: {self.config.framework} / {self.config.model}")
         
-        # 0. Ensure InferenceMAX is available (auto-clone if needed)
+        # Ray mode: delegate to remote cluster and return when complete
+        if self.config.is_ray:
+            return self._execute_ray_benchmark()
+        
+        # 0. Ensure InferenceX is available (auto-clone if needed)
         try:
-            self.config.inferencemax_path = ensure_inferencemax_available(
-                self.config.inferencemax_path
+            self.config.inferencex_path = ensure_inferencex_available(
+                self.config.inferencex_path
             )
         except RuntimeError as e:
             result = BenchmarkResult()
             result.success = False
-            result.errors.append(f"Failed to setup InferenceMAX: {e}")
+            result.errors.append(f"Failed to setup InferenceX: {e}")
             result.errors.append(f"Please clone manually: git clone https://github.com/SemiAnalysisAI/InferenceX.git")
             return result
         
-        # 1. Copy Magpie generic scripts to InferenceMAX/benchmarks/
+        # 1. Copy Magpie generic scripts to InferenceX/benchmarks/
         self._prepare_benchmark_scripts()
         
         # 2. Determine runner type from GPU
@@ -139,10 +149,10 @@ class BenchmarkMode:
         result.framework = self.config.framework
         result.model = self.config.model
         
-        # Parse InferenceMAX output
-        result_file = workspace / "inferencemax_result.json"
+        # Parse InferenceX output
+        result_file = workspace / "inferencex_result.json"
         if result_file.exists():
-            parsed = ResultParser.parse_inferencemax_result(
+            parsed = ResultParser.parse_inferencex_result(
                 result_file,
                 framework=self.config.framework,
                 model=self.config.model,
@@ -157,7 +167,7 @@ class BenchmarkMode:
             result.success = False
             mode_label = "locally" if self.config.is_local else "inside container"
             result.errors.append(
-                f"inferencemax_result.json not found - benchmark may have failed {mode_label}"
+                f"inferencex_result.json not found - benchmark may have failed {mode_label}"
             )
             if stderr:
                 result.errors.append(f"stderr (last 500 chars): {stderr[-500:]}")
@@ -210,23 +220,23 @@ class BenchmarkMode:
         )
     
     def _get_runner_type(self) -> str:
-        """Get InferenceMAX runner type."""
+        """Get InferenceX runner type."""
         if self.config.runner_type:
             return self.config.runner_type
         return self.image_selector.get_runner_type(self.config.gpu_arch)
     
     def _prepare_benchmark_scripts(self) -> None:
         """
-        Copy Magpie generic benchmark scripts to InferenceMAX/benchmarks/.
+        Copy Magpie generic benchmark scripts to InferenceX/benchmarks/.
         
         This allows using Magpie's generic scripts while still leveraging
-        InferenceMAX's benchmark_lib.sh and other utilities.
+        InferenceX's benchmark_lib.sh and other utilities.
         
         Always overwrites to keep scripts in sync with Magpie source.
         """
         # Magpie scripts location: Magpie/scripts/benchmark/
         magpie_scripts = Path(__file__).parent.parent.parent / "scripts" / "benchmark"
-        target_dir = Path(self.config.inferencemax_path) / "benchmarks"
+        target_dir = Path(self.config.inferencex_path) / "benchmarks"
         
         if not magpie_scripts.exists():
             logger.debug(f"Magpie scripts directory not found: {magpie_scripts}")
@@ -280,7 +290,7 @@ class BenchmarkMode:
         Args:
             docker_image: Docker image to use
             workspace: Workspace directory path
-            runner_type: InferenceMAX runner type
+            runner_type: InferenceX runner type
         
         Returns:
             Docker command as list of strings
@@ -315,10 +325,10 @@ class BenchmarkMode:
         if os.path.exists(hf_cache):
             cmd.extend(["-v", f"{hf_cache}:/root/.cache/huggingface"])
         
-        # InferenceMAX mount
-        inferencemax_path = self.config.inferencemax_path
-        if os.path.exists(inferencemax_path):
-            cmd.extend(["-v", f"{inferencemax_path}:/opt/InferenceMAX"])
+        # InferenceX mount
+        inferencex_path = self.config.inferencex_path
+        if os.path.exists(inferencex_path):
+            cmd.extend(["-v", f"{inferencex_path}:/opt/InferenceX"])
 
         # Model directory mount — if the model path is a local directory, mount it
         # so the container can access the weights (e.g. /mnt/dcgpuval/datasets/...)
@@ -332,7 +342,7 @@ class BenchmarkMode:
         
         # Environment variables
         env_vars = self.config.get_env_vars()
-        env_vars["RESULT_FILENAME"] = "inferencemax_result"
+        env_vars["RESULT_FILENAME"] = "inferencex_result"
         env_vars["RESULT_DIR"] = "/workspace"
         env_vars["RUNNER_TYPE"] = runner_type
         
@@ -352,7 +362,7 @@ class BenchmarkMode:
             cmd.extend(["-e", f"{key}={value}"])
         
         # Working directory
-        cmd.extend(["-w", "/opt/InferenceMAX"])
+        cmd.extend(["-w", "/opt/InferenceX"])
         
         # Image and entrypoint - always override to bash for script compatibility
         cmd.extend(["--entrypoint", "/bin/bash"])
@@ -364,7 +374,7 @@ class BenchmarkMode:
         # With --entrypoint /bin/bash, pass -c as first arg
         cmd.extend([
             "-c",
-            f"cd /opt/InferenceMAX && bash {benchmark_script}"
+            f"cd /opt/InferenceX && bash {benchmark_script}"
         ])
         
         return cmd
@@ -373,7 +383,7 @@ class BenchmarkMode:
         """
         Create /workspace symlink pointing to the real workspace directory.
         
-        Many InferenceMAX scripts hardcode /workspace/ for result-dir and
+        Many InferenceX scripts hardcode /workspace/ for result-dir and
         server logs.  A symlink makes them work transparently in local mode.
         
         Returns:
@@ -420,23 +430,23 @@ class BenchmarkMode:
         
         Args:
             workspace: Workspace directory path
-            runner_type: InferenceMAX runner type
+            runner_type: InferenceX runner type
         
         Returns:
             Tuple of (command list, environment dict)
         """
         benchmark_script = self._get_benchmark_script(runner_type)
-        inferencemax_path = str(Path(self.config.inferencemax_path).resolve())
+        inferencex_path = str(Path(self.config.inferencex_path).resolve())
 
         cmd = [
             "bash", "-c",
-            f"cd {inferencemax_path} && bash {benchmark_script}",
+            f"cd {inferencex_path} && bash {benchmark_script}",
         ]
 
         env = os.environ.copy()
 
         env_vars = self.config.get_env_vars()
-        env_vars["RESULT_FILENAME"] = "inferencemax_result"
+        env_vars["RESULT_FILENAME"] = "inferencex_result"
         env_vars["RESULT_DIR"] = str(workspace)
         env_vars["RUNNER_TYPE"] = runner_type
 
@@ -549,13 +559,13 @@ class BenchmarkMode:
     
     def _get_benchmark_script(self, runner_type: str) -> str:
         """
-        Get InferenceMAX benchmark script path with 3-tier priority.
+        Get InferenceX benchmark script path with 3-tier priority.
         
         Searches benchmarks/ and its subdirectories (e.g. single_node/, multi_node/).
         
         Priority:
             1. User-specified script (benchmark_script config) - must exist
-            2. InferenceMAX native scripts: {prefix}_{precision}_{runner}.sh
+            2. InferenceX native scripts: {prefix}_{precision}_{runner}.sh
                - sglang -> dsr1_
                - vllm -> gptoss_
             3. Magpie generic scripts: {framework}_{runner}.sh
@@ -564,13 +574,13 @@ class BenchmarkMode:
             runner_type: Runner type (e.g., "mi300x", "h100", "b200")
         
         Returns:
-            Relative path to benchmark script (from InferenceMAX root)
+            Relative path to benchmark script (from InferenceX root)
             
         Raises:
             FileNotFoundError: If no suitable script found
         """
-        benchmarks_dir = Path(self.config.inferencemax_path) / "benchmarks"
-        inferencemax_root = Path(self.config.inferencemax_path)
+        benchmarks_dir = Path(self.config.inferencex_path) / "benchmarks"
+        inferencex_root = Path(self.config.inferencex_path)
         
         # Priority 1: User-specified script (must exist)
         if self.config.benchmark_script:
@@ -581,11 +591,11 @@ class BenchmarkMode:
                     f"Searched in: {benchmarks_dir} (including subdirectories)\n"
                     f"Please ensure the file exists or remove the benchmark_script config."
                 )
-            rel_path = found.relative_to(inferencemax_root)
+            rel_path = found.relative_to(inferencex_root)
             logger.info(f"Using user-specified script: {rel_path}")
             return str(rel_path)
         
-        # Priority 2: InferenceMAX native scripts
+        # Priority 2: InferenceX native scripts
         # Mapping: sglang -> dsr1_, vllm -> gptoss_
         prefix_map = {"sglang": "dsr1", "vllm": "gptoss"}
         prefix = prefix_map.get(self.config.framework)
@@ -594,8 +604,8 @@ class BenchmarkMode:
             native_script = f"{prefix}_{self.config.precision}_{runner_type}.sh"
             found = self._find_script_in_benchmarks(benchmarks_dir, native_script)
             if found:
-                rel_path = found.relative_to(inferencemax_root)
-                logger.info(f"Using InferenceMAX native script: {rel_path}")
+                rel_path = found.relative_to(inferencex_root)
+                logger.info(f"Using InferenceX native script: {rel_path}")
                 return str(rel_path)
         
         # Priority 3: Magpie generic scripts (top-level only)
@@ -610,7 +620,7 @@ class BenchmarkMode:
             f"precision={self.config.precision}, gpu={runner_type}.\n"
             f"Searched in: {benchmarks_dir} (including subdirectories)\n"
             f"Expected one of:\n"
-            f"  - {prefix}_{self.config.precision}_{runner_type}.sh (InferenceMAX native)\n"
+            f"  - {prefix}_{self.config.precision}_{runner_type}.sh (InferenceX native)\n"
             f"  - {generic_script} (Magpie generic)\n"
             f"Please create the script or specify benchmark_script in config."
         )
@@ -810,6 +820,190 @@ class BenchmarkMode:
             logger.exception(f"Gap analysis failed: {e}")
             return {"enabled": True, "error": str(e)}
     
+    def _build_ray_benchmark_task(self) -> Tuple[Optional["Task"], Optional[str]]:
+        """Build the ``Task`` for a Ray benchmark; sets ``self._task_id`` if unset."""
+        from ...core.task import Task, ModeType, ModeConfig
+
+        if self.config.ray_config is None:
+            return None, "ray_config is required when run_mode='ray'"
+
+        t_id = self._task_id or f"bench_{uuid.uuid4().hex[:12]}"
+        self._task_id = t_id
+
+        mode_config = ModeConfig(
+            mode_type=ModeType.BENCHMARK,
+            gpu_arch=self.config.gpu_arch,
+            timeout_seconds=self.config.timeout_seconds,
+            benchmark_config=self.config.to_dict(),
+        )
+        task = Task(
+            kernel_configs=[],
+            mode_config=mode_config,
+            task_id=t_id,
+        )
+        return task, None
+
+    def submit_ray_benchmark(self, executor: "RayJobExecutor") -> BenchmarkResult:
+        """
+        Submit a Ray benchmark without waiting for completion.
+
+        The remote task runs asynchronously; poll with MCP ``ray_task_*``
+        tools using the returned ``task_id``.
+
+        Args:
+            executor: A **started** ``RayJobExecutor`` (e.g. MCP singleton).
+
+        Returns:
+            ``BenchmarkResult`` with ``metadata`` containing ``task_id``,
+            ``ray_job_id``, and ``submitted: True`` on success.
+        """
+        result = BenchmarkResult()
+        result.framework = self.config.framework
+        result.model = self.config.model
+
+        if not self.config.is_ray:
+            result.success = False
+            result.errors.append("submit_ray_benchmark requires run_mode='ray'")
+            return result
+
+        task, err = self._build_ray_benchmark_task()
+        if err:
+            result.success = False
+            result.errors.append(err)
+            return result
+
+        try:
+            assert task is not None
+            tid = executor.submit(task)
+            logger.info(f"Submitted Ray benchmark task {tid} (async)")
+            result.success = True
+            result.metadata = {
+                "task_id": tid,
+                "ray_job_id": tid,
+                "submitted": True,
+            }
+            return result
+        except Exception as e:
+            result.success = False
+            result.errors.append(f"Ray submit failed: {e}")
+            logger.exception(f"submit_ray_benchmark failed: {e}")
+            return result
+
+    def _execute_ray_benchmark(self) -> BenchmarkResult:
+        """
+        Submit benchmark to a remote Ray cluster.
+
+        Dispatches the benchmark to a Ray GPU worker via ``ray.remote()``
+        and blocks until the task completes.  Returns a BenchmarkResult
+        with the full results from the worker.
+        """
+        from ...core.ray_executor import RayJobExecutor
+        from ...core.executor import ExecutorConfig, ExecutorType
+
+        result = BenchmarkResult()
+        rc = self.config.ray_config
+        if rc is None:
+            result.success = False
+            result.errors.append("ray_config is required when run_mode='ray'")
+            return result
+
+        executor = None
+        executor_started = False
+        try:
+            executor_config = ExecutorConfig(
+                executor_type=ExecutorType.RAY,
+                timeout_seconds=self.config.timeout_seconds,
+            )
+            executor = RayJobExecutor(executor_config, ray_config=rc)
+
+            if not executor.start():
+                executor.stop()
+                result.success = False
+                result.errors.append(
+                    f"Failed to connect to Ray cluster at {rc.cluster_address}"
+                )
+                return result
+
+            executor_started = True
+
+            task, err = self._build_ray_benchmark_task()
+            if err:
+                result.success = False
+                result.errors.append(err)
+                return result
+            assert task is not None
+
+            logger.info(f"Dispatching benchmark to Ray GPU worker (task={self._task_id})...")
+            task_result = executor.execute(task)
+
+            result.framework = self.config.framework
+            result.model = self.config.model
+            result.execution_time = task_result.execution_time
+
+            if task_result.status.value == "completed" and task_result.results:
+                self._populate_result_from_ray(result, task_result.results, rc)
+            else:
+                result.success = False
+                result.errors = task_result.errors or ["Ray task failed"]
+                result.metadata = {"task_id": self._task_id}
+
+            logger.info(f"Ray benchmark task {self._task_id} finished: {task_result.status.value}")
+            return result
+
+        except Exception as e:
+            result.success = False
+            result.errors.append(f"Ray submission failed: {e}")
+            logger.exception(f"Ray benchmark submission failed: {e}")
+            return result
+        finally:
+            if executor_started and executor is not None:
+                executor.stop()
+
+    def _populate_result_from_ray(
+        self, result: BenchmarkResult, ray_result: dict, rc
+    ) -> None:
+        """Fill *result* from the dict returned by the Ray worker."""
+        result.success = True
+        result.workspace_dir = ray_result.get("workspace_dir", "")
+
+        tp = ray_result.get("throughput")
+        if isinstance(tp, dict):
+            result.throughput = ThroughputMetrics(**{
+                k: tp[k] for k in ThroughputMetrics.__dataclass_fields__
+                if k in tp
+            })
+        else:
+            result.throughput = tp
+
+        lp = ray_result.get("latency")
+        if isinstance(lp, dict):
+            flat: dict = {}
+            for group in ("ttft", "tpot", "itl", "e2el"):
+                sub = lp.get(group, {})
+                if isinstance(sub, dict):
+                    flat[f"{group}_mean"] = sub.get("mean_ms", 0.0)
+                    flat[f"{group}_median"] = sub.get("median_ms", 0.0)
+                    flat[f"{group}_p99"] = sub.get("p99_ms", 0.0)
+                    flat[f"{group}_std"] = sub.get("std_ms", 0.0)
+                else:
+                    flat[f"{group}_mean"] = lp.get(f"{group}_mean", 0.0)
+                    flat[f"{group}_median"] = lp.get(f"{group}_median", 0.0)
+                    flat[f"{group}_p99"] = lp.get(f"{group}_p99", 0.0)
+                    flat[f"{group}_std"] = lp.get(f"{group}_std", 0.0)
+            result.latency = LatencyMetrics(**flat)
+        else:
+            result.latency = lp
+
+        result.kernel_summary = ray_result.get("kernel_summary", [])
+        result.top_bottlenecks = ray_result.get("top_bottlenecks", [])
+        result.gap_analysis = ray_result.get("gap_analysis")
+        result.tracelens_analysis = ray_result.get("tracelens_analysis")
+        result.errors = ray_result.get("errors", [])
+        result.metadata = {
+            "task_id": self._task_id,
+            "ray_cluster": rc.cluster_address,
+        }
+
     def cleanup(self) -> None:
         """Clean up resources."""
         if self._task_id and not self.config.is_local:

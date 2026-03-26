@@ -17,7 +17,7 @@ Benchmark mode enables framework-level performance benchmarking for LLM inferenc
 │  ┌──────────────────────────────────────────────────────────────┐   │
 │  │                    Docker Container                          │   │
 │  │  ┌─────────────┐        ┌─────────────────────────────────┐  │   │
-│  │  │ InferenceMAX│   →    │ vLLM / SGLang Server + Client   │  │   │
+│  │  │ InferenceX│   →    │ vLLM / SGLang Server + Client   │  │   │
 │  │  │   Scripts   │        │ + Torch Profiler                │  │   │
 │  │  └─────────────┘        └─────────────────────────────────┘  │   │
 │  └──────────────────────────────────────────────────────────────┘   │
@@ -133,10 +133,10 @@ benchmark:
   timeout_seconds: 3600        # Benchmark timeout
   
   # Paths
-  inferencemax_path: /path/to/InferenceMAX  # InferenceMAX installation
+  inferencex_path: /path/to/InferenceX  # InferenceX installation
   hf_cache_path: null          # HuggingFace cache directory
   
-  # InferenceMAX specific
+  # InferenceX specific
   runner_type: mi300x          # Hardware runner type
   benchmark_script: null       # Override benchmark script
 ```
@@ -241,7 +241,7 @@ results/benchmark_vllm_<timestamp>/
 ├── config.yaml                # Snapshot of benchmark configuration
 ├── container_stdout.log       # Container stdout
 ├── container_stderr.log       # Container stderr
-├── inferencemax_result.json   # Raw InferenceMAX output
+├── inferencex_result.json   # Raw InferenceX output
 ├── torch_trace/               # Raw torch profiler traces
 │   ├── *-rank-0.*.pt.trace.json.gz
 │   ├── *-rank-1.*.pt.trace.json.gz
@@ -422,7 +422,7 @@ python -m Magpie benchmark --benchmark-config config.yaml --log-level DEBUG
 ### Execution Flow
 
 1. **Configuration Loading**: Parse YAML config into `BenchmarkConfig`
-2. **Docker Setup**: Prepare container with InferenceMAX scripts
+2. **Docker Setup**: Prepare container with InferenceX scripts
 3. **Server Launch**: Start vLLM/SGLang server inside container
 4. **Client Execution**: Run benchmark client with profiling enabled
 5. **Trace Collection**: Torch profiler traces saved to workspace
@@ -433,7 +433,7 @@ python -m Magpie benchmark --benchmark-config config.yaml --log-level DEBUG
 ## Related
 
 - [TraceLens](https://github.com/AMD-AIG-AIMA/TraceLens) - Trace analysis library
-- [InferenceMAX](https://github.com/AMD-AIG-AIMA/InferenceMAX) - Benchmark scripts
+- [InferenceX](https://github.com/AMD-AIG-AIMA/InferenceX) - Benchmark scripts
 - [vLLM](https://github.com/vllm-project/vllm) - LLM inference engine
 - [SGLang](https://github.com/sgl-project/sglang) - LLM serving framework
 

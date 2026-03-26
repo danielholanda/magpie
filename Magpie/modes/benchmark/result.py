@@ -6,7 +6,7 @@
 """
 Result classes for benchmark mode.
 
-Parses and structures benchmark results from InferenceMAX output.
+Parses and structures benchmark results from InferenceX output.
 """
 
 import json
@@ -122,7 +122,7 @@ class BenchmarkResult:
     """
     Complete benchmark result.
     
-    Aggregates results from InferenceMAX benchmark execution including
+    Aggregates results from InferenceX benchmark execution including
     throughput, latency, and optional profiling data.
     """
     success: bool = False
@@ -267,20 +267,20 @@ class BenchmarkResult:
 
 class ResultParser:
     """
-    Parses InferenceMAX benchmark output into structured results.
+    Parses InferenceX benchmark output into structured results.
     """
     
     @staticmethod
-    def parse_inferencemax_result(
+    def parse_inferencex_result(
         result_file: Path,
         framework: str = "",
         model: str = "",
     ) -> BenchmarkResult:
         """
-        Parse InferenceMAX result JSON file.
+        Parse InferenceX result JSON file.
         
         Args:
-            result_file: Path to inferencemax_result.json
+            result_file: Path to inferencex_result.json
             framework: Framework name
             model: Model name
         
