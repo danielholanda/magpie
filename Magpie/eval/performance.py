@@ -928,8 +928,11 @@ class Performance:
         if metrix_path is None:
             return PerformanceResult(
                 success=False,
-                errors="metrix not found. Install IntelliKit Metrix "
-                "(pip install intellikit[metrix]).",
+                errors=(
+                    "metrix not found. Install IntelliKit Metrix "
+                    '(pip install "git+https://github.com/AMDResearch/intellikit.git@'
+                    '1511ed984c01f2254df3ca567153c5e7cb2ac9d9#subdirectory=metrix").'
+                ),
             )
 
         testcase_commands = kernel_cfg.get_testcase_commands()

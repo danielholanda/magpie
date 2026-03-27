@@ -2,7 +2,7 @@
 # ================================================
 # Prereq:
 #   cd examples/simple_hip_test && hipcc -g -O2 -o vector_add vector_add.hip
-#   pip install intellikit[accordo]
+#   pip install "git+https://github.com/AMDResearch/intellikit.git@1511ed984c01f2254df3ca567153c5e7cb2ac9d9#subdirectory=accordo"
 # Note:
 #   Binaries must be compiled with -g so Accordo can extract kernel arguments.
 #   First run builds the Accordo interception library (~2-3 min one-time cost).
@@ -28,4 +28,4 @@ correctness:
     kernel_name: "vector_add(float const*, float const*, float*, int)"
     reference_binary: "./vector_add"
     optimized_binary: "./vector_add"
-    tolerance: 1.0e-6
+    atol: 1.0e-6
