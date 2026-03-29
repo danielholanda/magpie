@@ -1,35 +1,37 @@
 # Installing the Magpie skill
 
-The Magpie skill lets AI agents (Cursor, Claude Code, Codex, etc.) perform all Magpie tasks via CLI instructions when MCP is not available. The skill is stored in this repo under **`skills/magpie/`** (IDE-neutral). To use it in an editor, install it into that editor’s skills location using the script below or the manual steps.
+The Magpie skill lets AI agents (Cursor, Claude Code, Codex, etc.) drive Magpie through documented CLI patterns when MCP is not available. The skill lives in this repo under **`skills/magpie/`** (IDE-neutral). Install it into each editor’s skills directory with the script below, or follow the manual copy steps.
 
 ## Install script (recommended)
 
-From the Magpie repo root:
+From the Magpie repository root:
 
 ```bash
-# Make the script executable once
+# Optional: make the script executable once
 chmod +x skills/install-skill.sh
 
-# Install for Cursor (global: ~/.cursor/skills/magpie)
+# Global install (default): user home, e.g. ~/.cursor/skills/magpie
 ./skills/install-skill.sh cursor
-
-# Install for Claude Code (global: ~/.claude/skills/magpie)
 ./skills/install-skill.sh claude
-
-# Install for Codex (global: ~/.codex/skills/magpie)
 ./skills/install-skill.sh codex
-
-# Install for all three
 ./skills/install-skill.sh all
 
-# Project scope: install into current directory for Cursor
+# Explicit global scope (same as omitting the flag)
+./skills/install-skill.sh cursor --global
+
+# Project scope: current working directory
 ./skills/install-skill.sh cursor --project
 
-# Project scope: install into a specific project directory
+# Project scope: specific directory
 ./skills/install-skill.sh claude --project /path/to/your/project
+
+# Help
+./skills/install-skill.sh -h
 ```
 
-No restart is usually required; each editor discovers skills automatically.
+**Behavior:** The script removes any existing destination folder named `magpie` and copies `skills/magpie` there. No editor restart is usually required.
+
+**Related docs:** [Analyze vs Compare](analysis_compare.md), [Benchmark mode](benchmark.md), [README](../README.md) (MCP vs skill).
 
 ## Manual install
 
