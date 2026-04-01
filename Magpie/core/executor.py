@@ -13,19 +13,47 @@ This module provides:
 """
 
 import logging
+import multiprocessing
+import os
 import subprocess
 import time
 from abc import ABC, abstractmethod
 from concurrent.futures import ProcessPoolExecutor, Future
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .task import Task, TaskResult, TaskStatus, ModeType
 from ..config import KernelEvalConfig, KernelType
 from ..utils.gpu import get_gpu_count
 
 logger = logging.getLogger(__name__)
+
+
+def _local_pool_worker_init(counter, lock, gpu_devices: Tuple[int, ...]) -> None:
+    """ProcessPool initializer: round-robin bind this worker to one physical GPU.
+
+    Each pool process runs once at startup; ``counter`` assigns 0,1,... modulo
+    ``len(gpu_devices)``. Visible-device env makes that GPU appear as index 0
+    to CUDA/HIP stacks.
+    """
+    from multiprocessing import current_process
+
+    if not gpu_devices:
+        return
+    with lock:
+        idx = counter.value % len(gpu_devices)
+        counter.value += 1
+        phys_id = int(gpu_devices[idx])
+    dev = str(phys_id)
+    os.environ["CUDA_VISIBLE_DEVICES"] = dev
+    os.environ["HIP_VISIBLE_DEVICES"] = dev
+    os.environ["ROCR_VISIBLE_DEVICES"] = dev
+    logger.info(
+        "LocalExecutor worker %s bound to physical GPU %s (round-robin)",
+        current_process().name,
+        phys_id,
+    )
 
 
 class ExecutorType(Enum):
@@ -148,6 +176,12 @@ class LocalExecutor(BaseExecutor):
 
     Executes tasks locally using a ProcessPoolExecutor for
     parallel execution of multiple tasks.
+
+    When ``config.gpu_devices`` is non-empty, each pool worker sets
+    ``CUDA_VISIBLE_DEVICES`` / ``HIP_VISIBLE_DEVICES`` / ``ROCR_VISIBLE_DEVICES``
+    at process start using round-robin over that list (worker 0 → index 0, …).
+    Synchronous ``execute()`` still runs in the parent process and does not apply
+    this binding.
     """
 
     def __init__(self, config: ExecutorConfig):
@@ -160,6 +194,8 @@ class LocalExecutor(BaseExecutor):
         super().__init__(config)
         self._pool: Optional[ProcessPoolExecutor] = None
         self._available_gpus: List[int] = []
+        self._gpu_rr_counter: Optional[Any] = None
+        self._gpu_rr_lock: Optional[Any] = None
 
     def start(self) -> bool:
         """
@@ -177,9 +213,38 @@ class LocalExecutor(BaseExecutor):
         # Verify GPU availability
         _ = self._check_gpu_availability()
 
-        # Create process pool
+        # Create process pool (optional per-worker GPU binding via initializer)
         try:
-            self._pool = ProcessPoolExecutor(max_workers=self.config.max_workers)
+            gpu_tuple: Tuple[int, ...] = tuple()
+            if self.config.gpu_devices:
+                gpu_tuple = tuple(int(x) for x in self.config.gpu_devices)
+            pool_kw: Dict[str, Any] = {"max_workers": self.config.max_workers}
+            if gpu_tuple:
+                self._gpu_rr_counter = multiprocessing.Value("i", 0)
+                self._gpu_rr_lock = multiprocessing.Lock()
+                pool_kw["initializer"] = _local_pool_worker_init
+                pool_kw["initargs"] = (
+                    self._gpu_rr_counter,
+                    self._gpu_rr_lock,
+                    gpu_tuple,
+                )
+                logger.info(
+                    "LocalExecutor GPU round-robin over %s (%s worker(s))",
+                    list(gpu_tuple),
+                    self.config.max_workers,
+                )
+            self._pool = ProcessPoolExecutor(**pool_kw)
+            if (
+                self.config.max_workers > 1
+                and len(gpu_tuple) == 1
+                and len(self._available_gpus) > 1
+            ):
+                logger.info(
+                    "Parallel local runs all use gpu_devices=%s; set scheduler.gpu_devices "
+                    "to e.g. %s to spread workers across GPUs.",
+                    list(gpu_tuple),
+                    self._available_gpus[: self.config.max_workers],
+                )
             self._is_running = True
             logger.info(f"LocalExecutor started with {self.config.max_workers} workers")
             return True
@@ -192,6 +257,8 @@ class LocalExecutor(BaseExecutor):
         if self._pool:
             self._pool.shutdown(wait=True)
             self._pool = None
+        self._gpu_rr_counter = None
+        self._gpu_rr_lock = None
         self._is_running = False
         self._pending_tasks.clear()
         self._futures.clear()
@@ -324,6 +391,19 @@ class LocalExecutor(BaseExecutor):
         if gpu_count > 0:
             self._available_gpus = list(range(gpu_count))
             logger.info(f"Found {gpu_count} GPU(s)")
+            if self.config.gpu_devices:
+                bad = [
+                    g
+                    for g in self.config.gpu_devices
+                    if int(g) < 0 or int(g) >= gpu_count
+                ]
+                if bad:
+                    logger.warning(
+                        "scheduler.gpu_devices %s are out of range for %s GPU(s) — "
+                        "binding may fail at runtime",
+                        bad,
+                        gpu_count,
+                    )
             return True
         else:
             logger.error(

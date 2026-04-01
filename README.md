@@ -17,7 +17,7 @@ A lightweight, general-purpose framework for evaluating GPU kernel correctness a
 - Python 3.10+
 - AMD ROCm (HIP) or NVIDIA CUDA toolchain (for kernel compilation/profiling)
 - `rocprof-compute` (AMD) or `ncu` (NVIDIA) if you enable performance profiling
-- Docker (required for Benchmark mode)
+- Docker (default for Benchmark mode when `run_mode` is `docker`; host execution uses `run_mode: local`)
 
 ## Installation
 
@@ -51,14 +51,17 @@ magpie analyze --kernel-config Magpie/kernel_config.yaml.example
 # Compare kernels directly
 magpie compare kernel_v1.hip kernel_v2.hip
 
-# Benchmark vLLM with torch profiling
-magpie benchmark --benchmark-config examples/benchmark_vllm.yaml
+# Benchmark vLLM (see examples/benchmarks/*.yaml)
+magpie benchmark --benchmark-config examples/benchmarks/benchmark_vllm_dsr1.yaml
+
+# GPU / toolchain summary
+magpie --gpu-info
 
 # Run MCP server
 python -m Magpie.mcp
 ```
 
-> **Note:** You can also use `python -m Magpie` instead of `magpie` command.
+> **Note:** You can use `python -m Magpie` instead of the `magpie` CLI for the same subcommands.
 
 ## Evaluation Modes
 
@@ -68,17 +71,21 @@ python -m Magpie.mcp
 | **Compare** | Multi-kernel comparison and ranking | ✅ |
 | **Benchmark** | Framework-level benchmarking (vLLM/SGLang) with trace analysis | ✅ |
 
-> 📖 See [Benchmark Mode Documentation](docs/benchmark.md) for detailed usage.
+> 📖 See [Benchmark mode](docs/benchmark.md) for vLLM/SGLang usage.  
+> 📖 See [Analyze vs Compare](docs/analysis_compare.md) for kernel evaluation modes.
 
 ## Configuration
 
 ### Framework Config (`Magpie/config.yaml`)
 
 Key categories:
-- `gpu`: force device selection and hardware control (power/frequency).
-- `scheduler`: local/container/remote execution and scheduling behavior.
-- `performance`: profiling and profiler configuration.
-- `logging`: log levels and output formatting.
+- `gpu`: device selection and hardware control (power/frequency).
+- `scheduler`: local, container, or Ray execution and worker settings.
+- `compiling` / `correctness`: default compile behavior, testcase vs Accordo, tolerances.
+- `performance`: profiler backend (rocprof-compute, ncu, Metrix), timeouts, metric blocks.
+- `compare`: perf metric weights and winner selection for compare mode.
+- `benchmark`: InferenceX path, image mapping, default profiler flags.
+- `logging`: log levels and optional file output.
 
 ### Kernel Config
 
@@ -90,11 +97,14 @@ Example configs live in `examples/`:
 
 | Mode | Config File | Description |
 |------|-------------|-------------|
-| Analyze | `ck_gemm_add.yaml` | Single kernel evaluation |
-| Compare | `ck_grouped_gemm_compare.yaml` | Multi-kernel comparison |
-| Benchmark | `benchmark_vllm.yaml` | vLLM benchmark with profiling |
-| Benchmark | `benchmark_vllm_tracelens.yaml` | vLLM + TraceLens analysis |
-| Benchmark | `benchmark_sglang.yaml` | SGLang benchmark |
+| Analyze | `examples/ck_gemm_add.yaml` | Single kernel evaluation |
+| Analyze | `examples/simple_hip_test/analyze_default.yaml` | Minimal HIP example |
+| Compare | `examples/ck_grouped_gemm_compare.yaml` | Multi-kernel comparison |
+| Benchmark | `examples/benchmarks/benchmark_vllm_dsr1.yaml` | vLLM (DeepSeek-R1-style) |
+| Benchmark | `examples/benchmarks/benchmark_vllm_tracelens.yaml` | vLLM + TraceLens |
+| Benchmark | `examples/benchmarks/benchmark_vllm_kimi_k2.yaml` | vLLM + gap analysis example |
+| Benchmark | `examples/benchmarks/benchmark_sglang_dsr1.yaml` | SGLang benchmark |
+| Benchmark | `examples/benchmarks/benchmark_vllm_*_ray.yaml` | vLLM on Ray|
 
 ## MCP Server
 
@@ -115,7 +125,7 @@ Available tools:
 - `get_benchmark_result` - Read detailed results from a specific benchmark run
 - `compare_benchmark_reports` - Compare TraceLens reports across benchmark runs
 
-For environments without MCP, use the Magpie skill; see [docs/skills-install.md](docs/skills-install.md).
+For environments without MCP, install the Magpie skill; see [docs/skills-install.md](docs/skills-install.md).
 
 ## Development
 
@@ -136,7 +146,10 @@ make format
 ├── Makefile
 ├── examples/            # Example configurations
 ├── docs/                # Documentation
-│   └── benchmark.md     # Benchmark mode documentation
+│   ├── benchmark.md          # Benchmark mode (vLLM / SGLang)
+│   ├── analysis_compare.md   # Analyze vs Compare kernel modes
+│   ├── skills-install.md     # Agent skill installation
+│   └── images/               # Architecture diagrams
 └── Magpie/
     ├── __init__.py          # Package initialization
     ├── __main__.py          # Entry point for python -m Magpie
@@ -153,6 +166,7 @@ make format
     │       ├── benchmarker.py   # Benchmark orchestration
     │       ├── config.py        # Benchmark configuration
     │       ├── tracelens.py     # TraceLens integration
+    │       ├── gap_analysis.py  # Kernel bottleneck report from torch traces
     │       └── result.py        # Result data structures
     ├── mcp/                 # MCP Server
     │   ├── __init__.py

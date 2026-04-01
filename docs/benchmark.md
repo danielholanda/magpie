@@ -2,6 +2,8 @@
 
 Benchmark mode enables framework-level performance benchmarking for LLM inference engines (vLLM, SGLang) with integrated trace analysis capabilities.
 
+**Execution:** Benchmarks use `run_mode`: **`docker`** (default), **`local`** (host / in-pod, via YAML or `--run-mode local`), or **`ray`** (driver submits `RayJobExecutor`; a **GPU worker** runs the same InferenceX → vLLM/SGLang flow—see [Magpie + Ray](ray-magpie.md)). InferenceX is cloned automatically when `inferencex_path` is empty (see `Magpie/config.yaml` `benchmark.inferencex_path`).
+
 ## Overview
 
 ```
@@ -15,17 +17,20 @@ Benchmark mode enables framework-level performance benchmarking for LLM inferenc
 │                               │                                     │
 │                               ▼                                     │
 │  ┌──────────────────────────────────────────────────────────────┐   │
-│  │                    Docker Container                          │   │
+│  │  Runtime: docker │ local │ ray                                │   │
 │  │  ┌─────────────┐        ┌─────────────────────────────────┐  │   │
-│  │  │ InferenceX│   →    │ vLLM / SGLang Server + Client   │  │   │
-│  │  │   Scripts   │        │ + Torch Profiler                │  │   │
+│  │  │ InferenceX  │  →    │ vLLM / SGLang Server + Client   │  │   │
+│  │  │ scripts     │        │ + Torch Profiler                │  │   │
 │  │  └─────────────┘        └─────────────────────────────────┘  │   │
+│  │  Ray: Magpie driver → RayJobExecutor → GPU worker runs the   │   │
+│  │        same stack (local/docker on worker; NFS for cache/     │   │
+│  │        results). See docs/ray-magpie.md                       │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 │                               │                                     │
 │                      ┌────────┴────────┐                            │
 │                      ▼                 ▼                            │
 │  ┌────────────────────────┐  ┌─────────────────────────────────┐   │
-│  │  Gap Analysis (Host)   │  │  TraceLens Analysis (Host)      │   │
+│  │  Gap Analysis          │  │  TraceLens Analysis             │   │
 │  │  • Time window filter  │  │  • Perf report (per-rank)       │   │
 │  │  • Category filter     │  │  • Multi-rank collective report │   │
 │  │  • Kernel stats CSV    │  │                                 │   │
@@ -36,20 +41,23 @@ Benchmark mode enables framework-level performance benchmarking for LLM inferenc
 ## Quick Start
 
 ```bash
-# Basic vLLM benchmark
-python -m Magpie benchmark --benchmark-config examples/benchmark_vllm.yaml
+# Basic vLLM benchmark (paths are under examples/benchmarks/)
+python -m Magpie benchmark --benchmark-config examples/benchmarks/benchmark_vllm_dsr1.yaml
 
 # vLLM with TraceLens analysis
-python -m Magpie benchmark --benchmark-config examples/benchmark_vllm_tracelens.yaml
+python -m Magpie benchmark --benchmark-config examples/benchmarks/benchmark_vllm_tracelens.yaml
 
 # vLLM with gap analysis (kernel bottleneck report)
-python -m Magpie benchmark --benchmark-config examples/benchmark_vllm_kimi_k2.yaml
+python -m Magpie benchmark --benchmark-config examples/benchmarks/benchmark_vllm_kimi_k2.yaml
 
 # Standalone gap analysis on existing traces
 python -m Magpie benchmark gap-analysis --trace-dir results/benchmark_vllm_<timestamp>/
 
 # SGLang benchmark
-python -m Magpie benchmark --benchmark-config examples/benchmark_sglang.yaml
+python -m Magpie benchmark --benchmark-config examples/benchmarks/benchmark_sglang_dsr1.yaml
+
+# Ad-hoc CLI without a YAML file (framework + model; optional torch profiler)
+python -m Magpie benchmark vllm --model deepseek-ai/DeepSeek-R1-0528 --torch-profiler
 ```
 
 ## Configuration
@@ -128,6 +136,7 @@ benchmark:
       - gpu_user_annotation
       
   # Execution settings
+  run_mode: docker             # "docker" (default) or "local" (host / in-container)
   docker_image: null           # Optional: override auto-selected image
   gpu_arch: null               # Optional: force GPU architecture
   timeout_seconds: 3600        # Benchmark timeout
@@ -215,11 +224,11 @@ Gap analysis identifies GPU kernel bottlenecks from torch profiler traces. It ap
 Run gap analysis on existing trace directories without re-running the benchmark:
 
 ```bash
-# Basic usage (uses default categories and ignore_categories)
+# Basic usage (CLI defaults: --start-pct 0 --end-pct 100 unless you override)
 python -m Magpie benchmark gap-analysis \
     --trace-dir results/benchmark_vllm_<timestamp>/
 
-# With custom window and categories
+# With custom window and categories (align with YAML gap_analysis window if desired)
 python -m Magpie benchmark gap-analysis \
     --trace-dir results/benchmark_vllm_<timestamp>/torch_trace \
     --start-pct 50 --end-pct 80 \
@@ -259,9 +268,9 @@ results/benchmark_vllm_<timestamp>/
     └── ...
 ```
 
-## Benchmark Result
+## Benchmark report
 
-The `benchmark_result.json` contains:
+The primary summary file is **`benchmark_report.json`** in the run workspace (see `WorkspaceManager.save_report`). It aggregates throughput, latency, and optional `gap_analysis` / `tracelens_analysis` sections. A typical shape:
 
 ```json
 {
@@ -422,8 +431,8 @@ python -m Magpie benchmark --benchmark-config config.yaml --log-level DEBUG
 ### Execution Flow
 
 1. **Configuration Loading**: Parse YAML config into `BenchmarkConfig`
-2. **Docker Setup**: Prepare container with InferenceX scripts
-3. **Server Launch**: Start vLLM/SGLang server inside container
+2. **Runtime Setup**: For `run_mode: docker`, prepare a container with InferenceX; for `local`, use the host environment
+3. **Server Launch**: Start vLLM/SGLang server (in container or on host per `run_mode`)
 4. **Client Execution**: Run benchmark client with profiling enabled
 5. **Trace Collection**: Torch profiler traces saved to workspace
 6. **TraceLens Analysis**: Run TraceLens CLI commands on host (if enabled)
@@ -432,8 +441,10 @@ python -m Magpie benchmark --benchmark-config config.yaml --log-level DEBUG
 
 ## Related
 
-- [TraceLens](https://github.com/AMD-AIG-AIMA/TraceLens) - Trace analysis library
-- [InferenceX](https://github.com/AMD-AIG-AIMA/InferenceX) - Benchmark scripts
-- [vLLM](https://github.com/vllm-project/vllm) - LLM inference engine
-- [SGLang](https://github.com/sgl-project/sglang) - LLM serving framework
+- [Analyze vs Compare](analysis_compare.md) — kernel evaluation modes (orthogonal to Benchmark)
+- [TraceLens](https://github.com/AMD-AIG-AIMA/TraceLens) — Trace analysis library
+- [InferenceX](https://github.com/SemiAnalysisAI/InferenceX) — Benchmark scripts (auto-clone target in default config)
+- [vLLM](https://github.com/vllm-project/vllm) — LLM inference engine
+- [SGLang](https://github.com/sgl-project/sglang) — LLM serving framework
+- [Ray + Magpie](ray-magpie.md) — optional remote benchmark scheduling
 
