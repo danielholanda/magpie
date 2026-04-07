@@ -894,11 +894,12 @@ def run_gap_analysis_standalone(args) -> int:
         print(f"Error: trace directory not found: {trace_dir}")
         return 1
 
+    top_k = getattr(args, "gap_analysis_top_k", None) or getattr(args, "top_k", 20)
     gap_config = GapAnalysisConfig(
         enabled=True,
         trace_start_pct=args.start_pct,
         trace_end_pct=args.end_pct,
-        top_k=args.top_k,
+        top_k=top_k,
         min_duration_us=args.min_duration_us,
         categories=getattr(args, "categories", None),
         ignore_categories=getattr(args, "ignore_categories", None),
@@ -953,8 +954,8 @@ def run_benchmark(args, config: Dict[str, Any]) -> int:
     """Run benchmark mode."""
     from .modes.benchmark import BenchmarkMode, BenchmarkConfig
 
-    # Handle gap-analysis sub-subcommand
-    if getattr(args, "benchmark_action", None) == "gap-analysis":
+    # Handle standalone gap-analysis (--trace-dir without framework)
+    if getattr(args, "trace_dir", None) is not None:
         return run_gap_analysis_standalone(args)
 
     # Build benchmark config
@@ -968,17 +969,27 @@ def run_benchmark(args, config: Dict[str, Any]) -> int:
             return 1
     elif args.framework and args.model:
         # Build from CLI arguments
+        envs: Dict[str, Any] = {
+            "TP": args.tp,
+            "CONC": args.concurrency,
+            "ISL": args.input_len,
+            "OSL": args.output_len,
+            "RANDOM_RANGE_RATIO": 0.5,
+        }
+        # Merge caller-supplied extra environment variables
+        for pair in getattr(args, "extra_envs", None) or []:
+            if "=" in pair:
+                k, v = pair.split("=", 1)
+                envs[k] = v
+
+        tracelens_enabled = getattr(args, "tracelens", False)
+        gap_enabled = getattr(args, "gap_analysis", False)
+
         benchmark_cfg = {
             "framework": args.framework,
             "model": args.model,
             "precision": args.precision,
-            "params": {
-                "TP": args.tp,
-                "CONC": args.concurrency,
-                "ISL": args.input_len,
-                "OSL": args.output_len,
-                "RANDOM_RANGE_RATIO": 0.5,
-            },
+            "envs": envs,
             "profiler": {
                 "torch_profiler": {
                     "enabled": args.torch_profiler,
@@ -986,9 +997,21 @@ def run_benchmark(args, config: Dict[str, Any]) -> int:
                 "system_profiler": {
                     "enabled": args.system_profiler,
                 },
+                "tracelens": {
+                    "enabled": tracelens_enabled,
+                },
+            },
+            "gap_analysis": {
+                "enabled": gap_enabled,
+                "top_k": getattr(args, "gap_analysis_top_k", 20),
+                "trace_start_pct": getattr(args, "gap_analysis_start_pct", 0.0),
+                "trace_end_pct": getattr(args, "gap_analysis_end_pct", 100.0),
             },
             "docker_image": args.docker_image,
+            "gpu_arch": getattr(args, "gpu_arch", None),
             "inferencex_path": args.inferencex_path,
+            "hf_cache_path": getattr(args, "hf_cache_path", None),
+            "runner_type": getattr(args, "runner_type", None),
             "benchmark_script": args.benchmark_script,
             "timeout_seconds": args.timeout,
         }
@@ -1190,6 +1213,26 @@ def create_parser() -> argparse.ArgumentParser:
         help="Enable system profiler (rocprof/ncu)"
     )
     benchmark_parser.add_argument(
+        "--tracelens", action="store_true",
+        help="Enable TraceLens trace analysis (requires --torch-profiler)"
+    )
+    benchmark_parser.add_argument(
+        "--gap-analysis", action="store_true", dest="gap_analysis",
+        help="Enable gap analysis on torch traces (requires --torch-profiler)"
+    )
+    benchmark_parser.add_argument(
+        "--gap-analysis-top-k", type=int, default=20,
+        help="Number of top bottleneck kernels in gap analysis (default: 20)"
+    )
+    benchmark_parser.add_argument(
+        "--gap-analysis-start-pct", type=float, default=0.0,
+        help="Gap analysis window start %% (0-100, default: 0)"
+    )
+    benchmark_parser.add_argument(
+        "--gap-analysis-end-pct", type=float, default=100.0,
+        help="Gap analysis window end %% (0-100, default: 100)"
+    )
+    benchmark_parser.add_argument(
         "--run-mode", type=str, default=None,
         choices=["docker", "local"],
         help="Execution mode: 'docker' (default) runs inside a container; "
@@ -1199,9 +1242,21 @@ def create_parser() -> argparse.ArgumentParser:
         "--docker-image", type=str, help="Override Docker image"
     )
     benchmark_parser.add_argument(
+        "--gpu-arch", type=str,
+        help="Force GPU architecture (e.g. gfx942, gfx950); auto-detected if omitted"
+    )
+    benchmark_parser.add_argument(
+        "--runner-type", type=str,
+        help="Hardware runner type (e.g. mi300x, mi355x, h100); auto-detected if omitted"
+    )
+    benchmark_parser.add_argument(
         "--inferencex-path", type=str,
         default="",
         help="Path to InferenceX installation (auto-cloned if not specified)"
+    )
+    benchmark_parser.add_argument(
+        "--hf-cache-path", type=str,
+        help="HuggingFace cache directory (default: ~/.cache/huggingface)"
     )
     benchmark_parser.add_argument(
         "--benchmark-script", type=str,
@@ -1211,6 +1266,10 @@ def create_parser() -> argparse.ArgumentParser:
         "--timeout", type=int, default=3600, help="Benchmark timeout in seconds"
     )
     benchmark_parser.add_argument(
+        "--extra-envs", type=str, nargs="*", metavar="KEY=VALUE",
+        help="Extra environment variables (e.g. --extra-envs NUM_PROMPTS=96 EXTRA_SGLANG_ARGS='--enable-torch-compile')"
+    )
+    benchmark_parser.add_argument(
         "--output-dir",
         "-o",
         type=Path,
@@ -1218,41 +1277,33 @@ def create_parser() -> argparse.ArgumentParser:
         help="Output directory",
     )
 
-    # Sub-subcommands under benchmark
-    benchmark_subs = benchmark_parser.add_subparsers(
-        dest="benchmark_action", help="Benchmark sub-actions"
+    # Standalone gap-analysis on existing traces (replaces sub-subparser to
+    # avoid argparse conflict with the positional `framework` argument)
+    benchmark_parser.add_argument(
+        "--trace-dir", type=Path, default=None,
+        help="Run standalone gap analysis on existing traces instead of a "
+             "benchmark. Pass the path to a torch_trace directory (or a "
+             "benchmark workspace containing one).",
     )
-
-    gap_parser = benchmark_subs.add_parser(
-        "gap-analysis", help="Run gap analysis on existing torch traces"
-    )
-    gap_parser.add_argument(
-        "--trace-dir", type=Path, required=True,
-        help="Path to torch_trace directory (or benchmark workspace)",
-    )
-    gap_parser.add_argument(
+    benchmark_parser.add_argument(
         "--start-pct", type=float, default=0.0,
-        help="Start of analysis window (0-100, default: 0)",
+        help="Gap analysis: start of window (0-100, default: 0)",
     )
-    gap_parser.add_argument(
+    benchmark_parser.add_argument(
         "--end-pct", type=float, default=100.0,
-        help="End of analysis window (0-100, default: 100)",
+        help="Gap analysis: end of window (0-100, default: 100)",
     )
-    gap_parser.add_argument(
-        "--top-k", type=int, default=20,
-        help="Number of top bottleneck kernels (default: 20)",
-    )
-    gap_parser.add_argument(
+    benchmark_parser.add_argument(
         "--min-duration-us", type=float, default=0.0,
-        help="Minimum event duration in microseconds (default: 0)",
+        help="Gap analysis: minimum event duration in microseconds (default: 0)",
     )
-    gap_parser.add_argument(
+    benchmark_parser.add_argument(
         "--categories", type=str, nargs="*", default=None,
-        help="Event categories to include (e.g. kernel gpu). None = all.",
+        help="Gap analysis: event categories to include (e.g. kernel gpu). None = all.",
     )
-    gap_parser.add_argument(
+    benchmark_parser.add_argument(
         "--ignore-categories", type=str, nargs="*", default=None,
-        help="Event categories to exclude (e.g. gpu_user_annotation)",
+        help="Gap analysis: event categories to exclude (e.g. gpu_user_annotation)",
     )
 
     return parser
