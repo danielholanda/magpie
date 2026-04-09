@@ -48,8 +48,8 @@ make install
 # Analyze a kernel using a config file
 magpie analyze --kernel-config Magpie/kernel_config.yaml.example
 
-# Compare kernels directly
-magpie compare kernel_v1.hip kernel_v2.hip
+# Compare kernels using a config file
+magpie compare --kernel-config examples/ck_grouped_gemm_compare.yaml
 
 # Benchmark vLLM (see examples/benchmarks/*.yaml)
 magpie benchmark --benchmark-config examples/benchmarks/benchmark_vllm_dsr1.yaml
