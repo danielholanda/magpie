@@ -148,6 +148,7 @@ class BenchmarkMode:
         result.execution_time = time.time() - start_time
         result.framework = self.config.framework
         result.model = self.config.model
+        result.profiling_enabled = self.config.profiler.torch_profiler.enabled
         
         # Parse InferenceX output
         result_file = workspace / "inferencex_result.json"
@@ -171,6 +172,20 @@ class BenchmarkMode:
             )
             if stderr:
                 result.errors.append(f"stderr (last 500 chars): {stderr[-500:]}")
+
+            server_log = workspace / "server.log"
+            if server_log.exists():
+                try:
+                    lines = server_log.read_text().splitlines()
+                    error_lines = [l for l in lines[-50:] if any(
+                        kw in l for kw in ["Error", "Exception", "FAILED", "Traceback", "RuntimeError"]
+                    )]
+                    if error_lines:
+                        result.errors.append(
+                            f"server.log errors: {chr(10).join(error_lines[-5:])}"
+                        )
+                except Exception:
+                    pass
         
         # Validate that we got actual results
         if result.success and not self._validate_results(result):

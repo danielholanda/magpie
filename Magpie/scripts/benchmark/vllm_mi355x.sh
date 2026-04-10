@@ -16,9 +16,10 @@ check_env_vars \
     CONC \
     ISL \
     OSL \
-    MAX_MODEL_LEN \
     RANDOM_RANGE_RATIO \
     RESULT_FILENAME
+
+MAX_MODEL_LEN=${MAX_MODEL_LEN:-4096}
 
 if [[ -n "$SLURM_JOB_ID" ]]; then
   echo "JOB $SLURM_JOB_ID running on $SLURMD_NODENAME"
@@ -44,6 +45,10 @@ export VLLM_ROCM_USE_AITER=1
 WORKSPACE_DIR=${RESULT_DIR:-/workspace}
 SERVER_LOG=${SERVER_LOG:-$WORKSPACE_DIR/server.log}
 PORT=${PORT:-8888}
+
+# Kill any residual server on the target port
+lsof -ti:$PORT 2>/dev/null | xargs -r kill -9 2>/dev/null || true
+sleep 2
 
 # Build profiler args for vLLM >= 0.15 (env var VLLM_TORCH_PROFILER_DIR is deprecated)
 PROFILER_ARGS=()
