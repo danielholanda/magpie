@@ -38,6 +38,7 @@ Usage:
     python -m Magpie.mcp
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -1241,7 +1242,7 @@ def create_kernel_config(
 # Tool 8: benchmark
 # =============================================================================
 @mcp.tool()
-def benchmark(
+async def benchmark(
     framework: str,
     model: str,
     precision: str = "fp8",
@@ -1424,7 +1425,10 @@ def benchmark(
             output_dir=output_dir,
         )
 
-        result = benchmarker.run()
+        try:
+            result = await asyncio.to_thread(benchmarker.run)
+        finally:
+            benchmarker.cleanup()
 
         response = result.to_dict()
         response["summary_text"] = result.get_summary()
@@ -2090,7 +2094,7 @@ def ray_task_list(
 # Tool 19: benchmark_batch
 # =============================================================================
 @mcp.tool()
-def benchmark_batch(
+async def benchmark_batch(
     configs: List[Dict[str, Any]],
     ray_cluster_address: str = "",
     ray_shared_storage_path: str = "",
@@ -2121,102 +2125,105 @@ def benchmark_batch(
     """
     from ..modes.benchmark import BenchmarkMode, BenchmarkConfig
 
-    try:
-        if not configs:
-            return json.dumps({"error": "configs list is empty"})
+    def _run_batch() -> str:
+        try:
+            if not configs:
+                return json.dumps({"error": "configs list is empty"})
 
-        results: List[Dict[str, Any]] = []
-        addr = ray_cluster_address or "auto"
-        shared_storage_root = ray_shared_storage_path or DEFAULT_SHARED_STORAGE_PATH
+            results: List[Dict[str, Any]] = []
+            addr = ray_cluster_address or "auto"
+            shared_storage_root = ray_shared_storage_path or DEFAULT_SHARED_STORAGE_PATH
 
-        if parallel:
-            executor = _get_ray_executor(addr, shared_storage_root)
-            for i, raw in enumerate(configs):
-                try:
-                    cfg = dict(raw)
-                    cfg["run_mode"] = "ray"
-                    if "ray_config" not in cfg:
-                        cfg["ray_config"] = {
-                            "cluster_address": addr,
-                            "shared_storage_path": shared_storage_root,
-                        }
+            if parallel:
+                executor = _get_ray_executor(addr, shared_storage_root)
+                for i, raw in enumerate(configs):
+                    try:
+                        cfg = dict(raw)
+                        cfg["run_mode"] = "ray"
+                        if "ray_config" not in cfg:
+                            cfg["ray_config"] = {
+                                "cluster_address": addr,
+                                "shared_storage_path": shared_storage_root,
+                            }
 
-                    benchmark_config = BenchmarkConfig.from_dict(cfg)
-                    benchmarker = BenchmarkMode(
-                        config=benchmark_config,
-                        output_dir=cfg.get("output_dir", "./results"),
-                    )
-                    sub = benchmarker.submit_ray_benchmark(executor)
-                    tid = (sub.metadata or {}).get("task_id", "unknown")
-                    if sub.success:
+                        benchmark_config = BenchmarkConfig.from_dict(cfg)
+                        benchmarker = BenchmarkMode(
+                            config=benchmark_config,
+                            output_dir=cfg.get("output_dir", "./results"),
+                        )
+                        sub = benchmarker.submit_ray_benchmark(executor)
+                        tid = (sub.metadata or {}).get("task_id", "unknown")
+                        if sub.success:
+                            results.append({
+                                "index": i,
+                                "framework": cfg.get("framework"),
+                                "model": cfg.get("model"),
+                                "task_id": tid,
+                                "ray_job_id": tid,
+                                "status": "SUBMITTED",
+                                "submitted": True,
+                            })
+                        else:
+                            results.append({
+                                "index": i,
+                                "framework": cfg.get("framework"),
+                                "model": cfg.get("model"),
+                                "error": "; ".join(sub.errors) if sub.errors else "submit failed",
+                            })
+                    except Exception as e:
+                        results.append({
+                            "index": i,
+                            "framework": raw.get("framework"),
+                            "model": raw.get("model"),
+                            "error": str(e),
+                        })
+            else:
+                for i, raw in enumerate(configs):
+                    try:
+                        cfg = dict(raw)
+                        cfg["run_mode"] = "ray"
+                        if "ray_config" not in cfg:
+                            cfg["ray_config"] = {
+                                "cluster_address": addr,
+                                "shared_storage_path": shared_storage_root,
+                            }
+
+                        benchmark_config = BenchmarkConfig.from_dict(cfg)
+                        benchmarker = BenchmarkMode(
+                            config=benchmark_config,
+                            output_dir=cfg.get("output_dir", "./results"),
+                        )
+                        result = benchmarker.run()
+                        ray_job_id = (result.metadata or {}).get("ray_job_id", "unknown")
                         results.append({
                             "index": i,
                             "framework": cfg.get("framework"),
                             "model": cfg.get("model"),
-                            "task_id": tid,
-                            "ray_job_id": tid,
-                            "status": "SUBMITTED",
-                            "submitted": True,
+                            "ray_job_id": ray_job_id,
+                            "status": "PENDING",
+                            "workspace_dir": result.workspace_dir,
                         })
-                    else:
+                    except Exception as e:
                         results.append({
                             "index": i,
-                            "framework": cfg.get("framework"),
-                            "model": cfg.get("model"),
-                            "error": "; ".join(sub.errors) if sub.errors else "submit failed",
+                            "framework": raw.get("framework"),
+                            "model": raw.get("model"),
+                            "error": str(e),
                         })
-                except Exception as e:
-                    results.append({
-                        "index": i,
-                        "framework": raw.get("framework"),
-                        "model": raw.get("model"),
-                        "error": str(e),
-                    })
-        else:
-            for i, raw in enumerate(configs):
-                try:
-                    cfg = dict(raw)
-                    cfg["run_mode"] = "ray"
-                    if "ray_config" not in cfg:
-                        cfg["ray_config"] = {
-                            "cluster_address": addr,
-                            "shared_storage_path": shared_storage_root,
-                        }
 
-                    benchmark_config = BenchmarkConfig.from_dict(cfg)
-                    benchmarker = BenchmarkMode(
-                        config=benchmark_config,
-                        output_dir=cfg.get("output_dir", "./results"),
-                    )
-                    result = benchmarker.run()
-                    ray_job_id = (result.metadata or {}).get("ray_job_id", "unknown")
-                    results.append({
-                        "index": i,
-                        "framework": cfg.get("framework"),
-                        "model": cfg.get("model"),
-                        "ray_job_id": ray_job_id,
-                        "status": "PENDING",
-                        "workspace_dir": result.workspace_dir,
-                    })
-                except Exception as e:
-                    results.append({
-                        "index": i,
-                        "framework": raw.get("framework"),
-                        "model": raw.get("model"),
-                        "error": str(e),
-                    })
+            ok = [r for r in results if "error" not in r]
+            return json.dumps({
+                "parallel": parallel,
+                "submitted": len(ok),
+                "failed": len([r for r in results if "error" in r]),
+                "jobs": results,
+            }, indent=2)
 
-        ok = [r for r in results if "error" not in r]
-        return json.dumps({
-            "parallel": parallel,
-            "submitted": len(ok),
-            "failed": len([r for r in results if "error" in r]),
-            "jobs": results,
-        }, indent=2)
+        except Exception as e:
+            logger.exception(f"benchmark_batch failed: {e}")
+            return json.dumps({"error": str(e)})
 
-    except Exception as e:
-        logger.exception(f"benchmark_batch failed: {e}")
-        return json.dumps({"error": str(e)})
+    return await asyncio.to_thread(_run_batch)
 
 
 # =============================================================================
