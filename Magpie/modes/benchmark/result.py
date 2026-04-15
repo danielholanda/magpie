@@ -9,6 +9,7 @@ Result classes for benchmark mode.
 Parses and structures benchmark results from InferenceX output.
 """
 
+import gzip
 import json
 import logging
 from dataclasses import dataclass, field
@@ -146,6 +147,7 @@ class BenchmarkResult:
     # Execution info
     workspace_dir: str = ""
     execution_time: float = 0.0
+    profiling_enabled: bool = False
     
     # Errors
     errors: List[str] = field(default_factory=list)
@@ -167,6 +169,7 @@ class BenchmarkResult:
             "gap_analysis": self.gap_analysis,
             "workspace_dir": self.workspace_dir,
             "execution_time": self.execution_time,
+            "profiling_enabled": self.profiling_enabled,
             "errors": self.errors,
         }
     
@@ -360,30 +363,31 @@ class ResultParser:
         if not trace_dir.exists():
             return kernels
         
-        # Look for trace JSON files
-        for trace_file in trace_dir.glob("*.json"):
+        trace_files = sorted(trace_dir.glob("*.json.gz")) + sorted(trace_dir.glob("*.json"))
+        for trace_file in trace_files:
             try:
-                with open(trace_file, 'r') as f:
-                    trace_data = json.load(f)
-                
-                # Parse Chrome trace format
+                if trace_file.suffix == ".gz":
+                    with gzip.open(trace_file, "rt") as f:
+                        trace_data = json.load(f)
+                else:
+                    with open(trace_file, "r") as f:
+                        trace_data = json.load(f)
+
                 events = trace_data.get("traceEvents", [])
                 kernel_times: Dict[str, float] = {}
                 kernel_counts: Dict[str, int] = {}
-                
+
                 for event in events:
                     if event.get("cat") == "kernel":
                         name = event.get("name", "unknown")
-                        dur = event.get("dur", 0) / 1000.0  # Convert to ms
-                        
+                        dur = event.get("dur", 0) / 1000.0
                         if name in kernel_times:
                             kernel_times[name] += dur
                             kernel_counts[name] += 1
                         else:
                             kernel_times[name] = dur
                             kernel_counts[name] = 1
-                
-                # Calculate percentages
+
                 total_time = sum(kernel_times.values())
                 for name, time_ms in sorted(kernel_times.items(), key=lambda x: -x[1]):
                     percent = (time_ms / total_time * 100) if total_time > 0 else 0
@@ -393,9 +397,9 @@ class ResultParser:
                         percent=percent,
                         calls=kernel_counts.get(name, 0),
                     ))
-                
+
                 break  # Only process first trace file
-                
+
             except Exception as e:
                 logger.warning(f"Failed to parse trace file {trace_file}: {e}")
         

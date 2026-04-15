@@ -11,6 +11,7 @@ Orchestrates benchmark execution using InferenceX as backend.
 
 import logging
 import os
+import signal
 import shutil
 import subprocess
 import time
@@ -132,6 +133,7 @@ class BenchmarkMode:
                 )
             finally:
                 self._remove_workspace_symlink(symlink)
+                self._cleanup_server_processes(self.config.framework)
         else:
             docker_image = self._select_image()
             docker_cmd = self._build_docker_command(
@@ -148,6 +150,7 @@ class BenchmarkMode:
         result.execution_time = time.time() - start_time
         result.framework = self.config.framework
         result.model = self.config.model
+        result.profiling_enabled = self.config.profiler.torch_profiler.enabled
         
         # Parse InferenceX output
         result_file = workspace / "inferencex_result.json"
@@ -171,6 +174,20 @@ class BenchmarkMode:
             )
             if stderr:
                 result.errors.append(f"stderr (last 500 chars): {stderr[-500:]}")
+
+            server_log = workspace / "server.log"
+            if server_log.exists():
+                try:
+                    lines = server_log.read_text().splitlines()
+                    error_lines = [l for l in lines[-50:] if any(
+                        kw in l for kw in ["Error", "Exception", "FAILED", "Traceback", "RuntimeError"]
+                    )]
+                    if error_lines:
+                        result.errors.append(
+                            f"server.log errors: {chr(10).join(error_lines[-5:])}"
+                        )
+                except Exception:
+                    pass
         
         # Validate that we got actual results
         if result.success and not self._validate_results(result):
@@ -383,26 +400,18 @@ class BenchmarkMode:
         """
         Create /workspace symlink pointing to the real workspace directory.
         
-        Many InferenceX scripts hardcode /workspace/ for result-dir and
-        server logs.  A symlink makes them work transparently in local mode.
+        Skipped: RESULT_DIR and SERVER_LOG are already passed via env vars
+        in _build_local_command, so InferenceX scripts resolve paths correctly
+        without a /workspace symlink. Creating symlinks in pods causes stale
+        references when benchmarks are interrupted.
         
         Returns:
-            The symlink Path if created, None if /workspace already exists.
+            Always None (symlink creation disabled).
         """
-        target = Path("/workspace")
-        if target.exists() or target.is_symlink():
-            logger.debug(f"/workspace already exists, skipping symlink")
-            return None
-        try:
-            target.symlink_to(workspace)
-            logger.info(f"Created symlink /workspace -> {workspace}")
-            return target
-        except OSError as e:
-            logger.warning(
-                f"Could not create /workspace symlink ({e}). "
-                f"Scripts that hardcode /workspace/ may write results to the wrong location."
-            )
-            return None
+        logger.debug(
+            f"Skipping /workspace symlink (RESULT_DIR={workspace} is passed via env)"
+        )
+        return None
 
     @staticmethod
     def _remove_workspace_symlink(symlink: Optional[Path]) -> None:
@@ -537,6 +546,55 @@ class BenchmarkMode:
             logger.exception(f"Benchmark execution failed: {e}")
 
         return result, stdout, stderr
+
+    @staticmethod
+    def _cleanup_server_processes(framework: str) -> None:
+        """Kill leftover inference server processes after benchmark completes.
+
+        Targets vllm/sglang server processes and their workers (TP workers,
+        schedulers, etc.) that may survive the shell EXIT trap — e.g. when
+        torch profiler stop hangs or NCCL cleanup stalls.
+        """
+        patterns = {
+            "vllm": [
+                "vllm.entrypoints",
+                "vllm serve",
+                "vllm.v1.executor",
+                "vllm.v1.worker",
+            ],
+            "sglang": [
+                "sglang.launch_server",
+                "sglang.srt.managers",
+                "sglang.srt.server",
+            ],
+        }
+
+        targets = patterns.get(framework, [])
+        if not targets:
+            return
+
+        killed = 0
+        for proc_dir in Path("/proc").iterdir():
+            if not proc_dir.name.isdigit():
+                continue
+            pid = int(proc_dir.name)
+            if pid == os.getpid():
+                continue
+            try:
+                cmdline = (proc_dir / "cmdline").read_bytes().decode(
+                    errors="replace"
+                ).replace("\x00", " ")
+                if any(pat in cmdline for pat in targets):
+                    os.kill(pid, signal.SIGKILL)
+                    killed += 1
+            except (ProcessLookupError, PermissionError, FileNotFoundError, OSError):
+                continue
+
+        if killed:
+            logger.info(
+                "cleanup: killed %d leftover %s process(es)", killed, framework
+            )
+            time.sleep(1)
 
     def _find_script_in_benchmarks(self, benchmarks_dir: Path, script_name: str) -> Optional[Path]:
         """
@@ -1006,7 +1064,9 @@ class BenchmarkMode:
 
     def cleanup(self) -> None:
         """Clean up resources."""
-        if self._task_id and not self.config.is_local:
+        if self.config.is_local:
+            self._cleanup_server_processes(self.config.framework)
+        elif self._task_id:
             try:
                 subprocess.run(
                     ["docker", "stop", f"magpie-benchmark-{self._task_id}"],

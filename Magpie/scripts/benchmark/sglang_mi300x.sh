@@ -31,8 +31,24 @@ fi
 export SGLANG_USE_AITER=1
 export SGLANG_AITER_MLA_PERSIST=1
 
-SERVER_LOG=${SERVER_LOG:-/workspace/server.log}
+WORKSPACE_DIR=${RESULT_DIR:-/workspace}
+SERVER_LOG=${SERVER_LOG:-$WORKSPACE_DIR/server.log}
 PORT=${PORT:-8888}
+
+if [[ "${PROFILE:-}" == "1" ]]; then
+  TRACE_DIR="${SGLANG_TORCH_PROFILER_DIR:-$WORKSPACE_DIR/torch_trace}"
+  mkdir -p "$TRACE_DIR"
+  export SGLANG_TORCH_PROFILER_DIR="$TRACE_DIR"
+fi
+
+# Build default args, skipping any that EXTRA_SGLANG_ARGS already overrides
+DEFAULT_ARGS=""
+for flag_val in "--mem-fraction-static=0.8" "--disable-radix-cache"; do
+  flag="${flag_val%%=*}"
+  if [[ -z "$EXTRA_SGLANG_ARGS" ]] || ! echo "$EXTRA_SGLANG_ARGS" | grep -q -- "$flag"; then
+    DEFAULT_ARGS="$DEFAULT_ARGS $flag_val"
+  fi
+done
 
 set -x
 setsid python3 -m sglang.launch_server \
@@ -41,8 +57,7 @@ setsid python3 -m sglang.launch_server \
   --port=$PORT \
   --trust-remote-code \
   --tensor-parallel-size=$TP \
-  --mem-fraction-static=0.8 \
-  --disable-radix-cache \
+  $DEFAULT_ARGS \
   $EXTRA_SGLANG_ARGS > $SERVER_LOG 2>&1 &
 
 SERVER_PID=$!
@@ -58,10 +73,10 @@ run_benchmark_serving \
     --input-len "$ISL" \
     --output-len "$OSL" \
     --random-range-ratio "$RANDOM_RANGE_RATIO" \
-    --num-prompts $(( $CONC * 10 )) \
+    --num-prompts ${NUM_PROMPTS:-$(( $CONC * 10 ))} \
     --max-concurrency "$CONC" \
     --result-filename "$RESULT_FILENAME" \
-    --result-dir /workspace/
+    --result-dir ${RESULT_DIR:-/workspace/}
 
 # After throughput, run evaluation only if RUN_EVAL is true
 if [ "${RUN_EVAL}" = "true" ]; then

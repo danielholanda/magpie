@@ -894,11 +894,12 @@ def run_gap_analysis_standalone(args) -> int:
         print(f"Error: trace directory not found: {trace_dir}")
         return 1
 
+    top_k = getattr(args, "top_k", 20)
     gap_config = GapAnalysisConfig(
         enabled=True,
         trace_start_pct=args.start_pct,
         trace_end_pct=args.end_pct,
-        top_k=args.top_k,
+        top_k=top_k,
         min_duration_us=args.min_duration_us,
         categories=getattr(args, "categories", None),
         ignore_categories=getattr(args, "ignore_categories", None),
@@ -953,8 +954,8 @@ def run_benchmark(args, config: Dict[str, Any]) -> int:
     """Run benchmark mode."""
     from .modes.benchmark import BenchmarkMode, BenchmarkConfig
 
-    # Handle gap-analysis sub-subcommand
-    if getattr(args, "benchmark_action", None) == "gap-analysis":
+    # Handle standalone gap-analysis (--trace-dir without framework)
+    if getattr(args, "trace_dir", None) is not None:
         return run_gap_analysis_standalone(args)
 
     # Build benchmark config
@@ -972,7 +973,7 @@ def run_benchmark(args, config: Dict[str, Any]) -> int:
             "framework": args.framework,
             "model": args.model,
             "precision": args.precision,
-            "params": {
+            "envs": {
                 "TP": args.tp,
                 "CONC": args.concurrency,
                 "ISL": args.input_len,
@@ -1218,41 +1219,37 @@ def create_parser() -> argparse.ArgumentParser:
         help="Output directory",
     )
 
-    # Sub-subcommands under benchmark
-    benchmark_subs = benchmark_parser.add_subparsers(
-        dest="benchmark_action", help="Benchmark sub-actions"
+    # Standalone gap-analysis on existing traces (replaces sub-subparser to
+    # avoid argparse conflict with the positional `framework` argument)
+    benchmark_parser.add_argument(
+        "--trace-dir", type=Path, default=None,
+        help="Run standalone gap analysis on existing traces instead of a "
+             "benchmark. Pass the path to a torch_trace directory (or a "
+             "benchmark workspace containing one).",
     )
-
-    gap_parser = benchmark_subs.add_parser(
-        "gap-analysis", help="Run gap analysis on existing torch traces"
-    )
-    gap_parser.add_argument(
-        "--trace-dir", type=Path, required=True,
-        help="Path to torch_trace directory (or benchmark workspace)",
-    )
-    gap_parser.add_argument(
-        "--start-pct", type=float, default=0.0,
-        help="Start of analysis window (0-100, default: 0)",
-    )
-    gap_parser.add_argument(
-        "--end-pct", type=float, default=100.0,
-        help="End of analysis window (0-100, default: 100)",
-    )
-    gap_parser.add_argument(
+    benchmark_parser.add_argument(
         "--top-k", type=int, default=20,
-        help="Number of top bottleneck kernels (default: 20)",
+        help="Gap analysis: number of top bottleneck kernels (default: 20)",
     )
-    gap_parser.add_argument(
+    benchmark_parser.add_argument(
+        "--start-pct", type=float, default=0.0,
+        help="Gap analysis: start of window (0-100, default: 0)",
+    )
+    benchmark_parser.add_argument(
+        "--end-pct", type=float, default=100.0,
+        help="Gap analysis: end of window (0-100, default: 100)",
+    )
+    benchmark_parser.add_argument(
         "--min-duration-us", type=float, default=0.0,
-        help="Minimum event duration in microseconds (default: 0)",
+        help="Gap analysis: minimum event duration in microseconds (default: 0)",
     )
-    gap_parser.add_argument(
+    benchmark_parser.add_argument(
         "--categories", type=str, nargs="*", default=None,
-        help="Event categories to include (e.g. kernel gpu). None = all.",
+        help="Gap analysis: event categories to include (e.g. kernel gpu). None = all.",
     )
-    gap_parser.add_argument(
+    benchmark_parser.add_argument(
         "--ignore-categories", type=str, nargs="*", default=None,
-        help="Event categories to exclude (e.g. gpu_user_annotation)",
+        help="Gap analysis: event categories to exclude (e.g. gpu_user_annotation)",
     )
 
     return parser
