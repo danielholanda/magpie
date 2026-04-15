@@ -1212,6 +1212,9 @@ def create_parser() -> argparse.ArgumentParser:
         "--system-profiler", action="store_true",
         help="Enable system profiler (rocprof/ncu)"
     )
+    # NOTE: For reproducible benchmarks, prefer YAML config via
+    # --benchmark-config (see examples/benchmarks/).  The CLI flags below
+    # are convenience shortcuts for ad-hoc runs and automation (Hyperloom).
     benchmark_parser.add_argument(
         "--tracelens", action="store_true",
         help="Enable TraceLens trace analysis (requires --torch-profiler)"

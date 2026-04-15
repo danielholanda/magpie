@@ -39,10 +39,6 @@ WORKSPACE_DIR=${RESULT_DIR:-/workspace}
 SERVER_LOG=${SERVER_LOG:-$WORKSPACE_DIR/server.log}
 PORT=${PORT:-8888}
 
-# Kill any residual server on the target port
-lsof -ti:$PORT 2>/dev/null | xargs -r kill -9 2>/dev/null || true
-sleep 2
-
 if [[ "${PROFILE:-}" == "1" ]]; then
   TRACE_DIR="${SGLANG_TORCH_PROFILER_DIR:-$WORKSPACE_DIR/torch_trace}"
   mkdir -p "$TRACE_DIR"

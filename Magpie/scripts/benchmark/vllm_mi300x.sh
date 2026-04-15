@@ -16,9 +16,10 @@ check_env_vars \
     CONC \
     ISL \
     OSL \
-    MAX_MODEL_LEN \
     RANDOM_RANGE_RATIO \
     RESULT_FILENAME
+
+MAX_MODEL_LEN=${MAX_MODEL_LEN:-4096}
 
 if [[ -n "$SLURM_JOB_ID" ]]; then
   echo "JOB $SLURM_JOB_ID running on $SLURMD_NODENAME"
@@ -40,13 +41,14 @@ fi
 # vLLM optimizations for MI300X
 export VLLM_ROCM_USE_AITER=1
 
-SERVER_LOG=${SERVER_LOG:-/workspace/server.log}
+WORKSPACE_DIR=${RESULT_DIR:-/workspace}
+SERVER_LOG=${SERVER_LOG:-$WORKSPACE_DIR/server.log}
 PORT=${PORT:-8888}
 
 # Build profiler args for vLLM >= 0.15 (env var VLLM_TORCH_PROFILER_DIR is deprecated)
 PROFILER_ARGS=()
 if [[ "${PROFILE:-}" == "1" ]]; then
-  TRACE_DIR="${VLLM_TORCH_PROFILER_DIR:-/workspace/torch_trace}"
+  TRACE_DIR="${VLLM_TORCH_PROFILER_DIR:-$WORKSPACE_DIR/torch_trace}"
   mkdir -p "$TRACE_DIR"
   PROFILER_ARGS+=(--profiler-config.profiler torch)
   PROFILER_ARGS+=(--profiler-config.torch_profiler_dir "$TRACE_DIR")
@@ -63,6 +65,7 @@ setsid vllm serve $MODEL --port $PORT \
   --max-model-len $MAX_MODEL_LEN \
   --trust-remote-code \
   --disable-log-requests \
+  "${PROFILER_ARGS[@]}" \
   $EXTRA_VLLM_ARGS > $SERVER_LOG 2>&1 &
 
 SERVER_PID=$!
@@ -81,7 +84,7 @@ run_benchmark_serving \
     --num-prompts ${NUM_PROMPTS:-$(( $CONC * 10 ))} \
     --max-concurrency "$CONC" \
     --result-filename "$RESULT_FILENAME" \
-    --result-dir /workspace/ \
+    --result-dir "$WORKSPACE_DIR/" \
     --server-pid "$SERVER_PID" \
     --trust-remote-code
 
