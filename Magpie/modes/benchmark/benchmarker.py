@@ -709,7 +709,13 @@ class BenchmarkMode:
             
             stdout = process.stdout or ""
             stderr = process.stderr or ""
-            
+
+            # Fix ownership: files written by root inside the container
+            # (server.log, inferencex_result.json, torch_trace/*, ...) appear
+            # as UID 0 on the host. chown them back to the invoking user so
+            # non-root users can read/modify/delete the output.
+            self._fix_workspace_ownership(workspace)
+
             # Save logs to workspace for debugging
             self._save_logs(workspace, stdout, stderr)
             
@@ -756,6 +762,40 @@ class BenchmarkMode:
         
         return result, stdout, stderr
     
+    def _fix_workspace_ownership(self, workspace: Path) -> None:
+        """chown workspace files back to the invoking user after docker run.
+
+        The benchmark container writes as root, so /workspace outputs land
+        as root-owned on the host. We can't chown them from this process
+        (non-root can't change another user's files), so we spawn a short-
+        lived helper container that runs as root, mounts the same workspace,
+        and chowns to the invoking UID/GID. Best-effort.
+        """
+        try:
+            uid = os.getuid()
+            gid = os.getgid()
+        except AttributeError:
+            return  # non-POSIX
+
+        if uid == 0:
+            return  # nothing to fix
+
+        image = self.config.docker_image or "busybox"
+        try:
+            subprocess.run(
+                [
+                    "docker", "run", "--rm",
+                    "-v", f"{workspace}:/workspace",
+                    "--entrypoint", "chown",
+                    image, "-R", f"{uid}:{gid}", "/workspace",
+                ],
+                capture_output=True,
+                timeout=60,
+                check=False,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to fix workspace ownership: {e}")
+
     def _save_logs(self, workspace: Path, stdout: str, stderr: str) -> None:
         """Save benchmark subprocess stdout/stderr to workspace for debugging."""
         try:

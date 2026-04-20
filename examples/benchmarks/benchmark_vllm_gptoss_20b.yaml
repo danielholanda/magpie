@@ -14,7 +14,7 @@
 
 benchmark:
   framework: vllm
-  model: /mnt/dcgpuval/datasets/openai/gpt-oss-20b
+  model: openai/gpt-oss-20b
   precision: fp4
 
   envs:
@@ -25,9 +25,11 @@ benchmark:
     RANDOM_RANGE_RATIO: 1
     MAX_MODEL_LEN: 2248  # ISL + OSL + 200
     EXTRA_VLLM_ARGS: "--no-enable-prefix-caching --block-size 64"
+    VLLM_LOGGING_LEVEL: "WARNING"
 
     # MI355X performance flags (supplements vllm_mi355x.sh defaults)
     VLLM_ROCM_USE_AITER: 1
+    VLLM_ROCM_USE_AITER_MHA: 0
     VLLM_ROCM_USE_AITER_UNIFIED_ATTENTION: 1
     VLLM_ROCM_USE_AITER_MHA: 0
     VLLM_USE_AITER_TRITON_FUSED_SPLIT_QKV_ROPE: 1
@@ -43,10 +45,10 @@ benchmark:
     tracelens:
       enabled: false
 
-  docker_image: "vllm/vllm-openai-rocm:v0.15.1"
-  benchmark_script: "vllm_mi355x.sh"
+  docker_image: "vllm/vllm-openai-rocm:v0.18.1"
+  benchmark_script: "vllm_mi300x.sh"
 
   gap_analysis:
-    enabled: true
+    enabled: false
 
   timeout_seconds: 2700

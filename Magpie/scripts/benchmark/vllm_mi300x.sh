@@ -64,7 +64,6 @@ setsid vllm serve $MODEL --port $PORT \
   --gpu-memory-utilization 0.95 \
   --max-model-len $MAX_MODEL_LEN \
   --trust-remote-code \
-  --disable-log-requests \
   "${PROFILER_ARGS[@]}" \
   $EXTRA_VLLM_ARGS > $SERVER_LOG 2>&1 &
 
