@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # InferenceX repository configuration
 INFERENCEX_REPO_URL = "https://github.com/SemiAnalysisAI/InferenceX.git"
-# Default directory:
+# Default directory resolution order (first writable candidate wins):
 _PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 INFERENCEX_DEFAULT_DIR = str(_PROJECT_ROOT / "InferenceX")
 
@@ -29,6 +29,40 @@ PLACEHOLDER_VALUES = {
     "YOUR_INFERENCEX_PATH",
     "",
 }
+
+
+def _resolve_default_inferencex_dir() -> str:
+    """Pick the first writable default location for InferenceX.
+
+    Precedence:
+      1. $MAGPIE_INFERENCEX_PATH (explicit override)
+      2. <magpie-repo>/../InferenceX (sibling of Magpie checkout)
+      3. $XDG_CACHE_HOME/magpie/InferenceX or ~/.cache/magpie/InferenceX
+      4. /root/workspace/InferenceX (legacy, for root-in-container setups)
+    """
+    env_override = os.environ.get("MAGPIE_INFERENCEX_PATH")
+    if env_override:
+        return env_override
+
+    candidates = [
+        INFERENCEX_DEFAULT_DIR,
+        str(Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
+            / "magpie" / "InferenceX"),
+        "/root/workspace/InferenceX",
+    ]
+    for candidate in candidates:
+        parent = os.path.dirname(candidate) or "/"
+        # Reuse if it already exists
+        if os.path.isdir(candidate):
+            return candidate
+        # Otherwise pick the first candidate whose parent we can create/write to
+        try:
+            os.makedirs(parent, exist_ok=True)
+            if os.access(parent, os.W_OK):
+                return candidate
+        except OSError:
+            continue
+    return INFERENCEX_DEFAULT_DIR
 
 
 class InferenceXManager:
@@ -44,17 +78,18 @@ class InferenceXManager:
     def __init__(
         self,
         repo_url: str = INFERENCEX_REPO_URL,
-        default_dir: str = INFERENCEX_DEFAULT_DIR,
+        default_dir: Optional[str] = None,
     ):
         """
         Initialize InferenceX manager.
         
         Args:
             repo_url: Git repository URL for InferenceX
-            default_dir: Default directory to clone into
+            default_dir: Default directory to clone into. If None, resolves
+                a writable default at call time (see _resolve_default_inferencex_dir).
         """
         self.repo_url = repo_url
-        self.default_dir = default_dir
+        self.default_dir = default_dir or _resolve_default_inferencex_dir()
     
     def ensure_available(self, configured_path: Optional[str] = None) -> str:
         """

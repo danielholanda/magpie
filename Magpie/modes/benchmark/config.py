@@ -399,7 +399,10 @@ class BenchmarkConfig:
     timeout_seconds: float = 3600.0
 
     # Paths
-    inferencex_path: str = "/root/workspace/InferenceX"
+    # Empty/None triggers auto-resolution in InferenceXManager:
+    #   1) $MAGPIE_INFERENCEX_PATH  2) ./InferenceX next to Magpie repo
+    #   3) ~/.cache/magpie/InferenceX
+    inferencex_path: str = ""
     hf_cache_path: Optional[str] = None
     
     # Gap analysis
@@ -546,7 +549,7 @@ class BenchmarkConfig:
             inferencex_path=(
                 data.get("inferencex_path")
                 or data.get("inferencemax_path")
-                or "/root/workspace/InferenceX"
+                or ""
             ),
             hf_cache_path=data.get("hf_cache_path"),
             runner_type=data.get("runner_type"),
