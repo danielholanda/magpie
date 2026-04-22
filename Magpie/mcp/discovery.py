@@ -17,7 +17,7 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 
-# Directories to skip during kernel discovery (for performance)
+# Directories to always skip during kernel discovery.
 SKIP_DIRS = frozenset(
     {
         ".git",
@@ -33,15 +33,25 @@ SKIP_DIRS = frozenset(
         ".tox",
         ".nox",
         ".pytest_cache",
-        "build",
         "dist",
-        "bin",
-        "out",
-        "results",
         "third_party",
         "external",
         "deps",
         "vendor",
+    }
+)
+
+# Build-like directories often contain generated sources. Keep skipping them for
+# HIP/CUDA discovery, but allow Triton discovery so generated Triton kernels can
+# still be surfaced.
+BUILD_LIKE_DIRS = frozenset(
+    {
+        "build",
+        "bin",
+        "out",
+        "results",
+        "cmake-build-release",
+        "cmake-build-debug",
     }
 )
 
@@ -64,6 +74,20 @@ def _decorator_root_name(node: ast.AST) -> Optional[str]:
     if isinstance(current, ast.Name):
         return current.id
     return None
+
+
+def _should_descend_into_dir(dir_name: str, kernel_type: str) -> bool:
+    """Return whether discovery should recurse into a directory."""
+    if dir_name.startswith(".") or dir_name in SKIP_DIRS:
+        return False
+    if dir_name in BUILD_LIKE_DIRS:
+        return kernel_type in ("triton", "all")
+    return True
+
+
+def _is_build_like_path(path: Path) -> bool:
+    """Return whether a relative path contains a build-like directory."""
+    return any(part in BUILD_LIKE_DIRS for part in path.parts)
 
 
 def is_triton_kernel_file(source_file: Path) -> bool:
@@ -162,12 +186,10 @@ def discover_project_kernels(
         extensions.update({".py"})
 
     discovered = []
-    build_dirs = ["build", "bin", "out", "cmake-build-release", "cmake-build-debug"]
+    build_dirs = sorted(BUILD_LIKE_DIRS)
 
     for root, dirs, files in os.walk(project):
-        dirs[:] = sorted(
-            d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")
-        )
+        dirs[:] = sorted(d for d in dirs if _should_descend_into_dir(d, kernel_type))
 
         for filename in sorted(files):
             ext = os.path.splitext(filename)[1]
@@ -175,11 +197,14 @@ def discover_project_kernels(
                 continue
 
             source_file = Path(root) / filename
+            rel_path = source_file.relative_to(project)
+
+            if _is_build_like_path(rel_path) and ext != ".py":
+                continue
             if ext == ".py" and not is_triton_kernel_file(source_file):
                 continue
 
-            rel_path = str(source_file.relative_to(project))
-            rel_path_lower = rel_path.lower()
+            rel_path_lower = str(rel_path).lower()
 
             is_test = "test" in rel_path_lower
             is_example = "example" in rel_path_lower

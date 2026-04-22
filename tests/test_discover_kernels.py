@@ -75,7 +75,7 @@ def imported_kernel(x_ptr):
     assert str(tmp_path / "source" / "from_import_kernel.py") in found
 
 
-def test_discover_kernels_skips_build_directories(tmp_path):
+def test_discover_kernels_includes_generated_triton_from_build_directories(tmp_path):
     _write(
         tmp_path / "build" / "generated_kernel.py",
         """
@@ -101,4 +101,44 @@ def real_kernel(x_ptr):
     found = {entry["source_file"] for entry in data["kernels"]}
 
     assert str(tmp_path / "src" / "real_kernel.py") in found
-    assert str(tmp_path / "build" / "generated_kernel.py") not in found
+    assert str(tmp_path / "build" / "generated_kernel.py") in found
+
+
+def test_discover_kernels_skips_non_triton_generated_sources_in_build_dirs(tmp_path):
+    _write(
+        tmp_path / "build" / "generated_kernel.cpp",
+        """
+extern "C" __global__ void generated_kernel(float* x) {}
+""",
+    )
+    _write(
+        tmp_path / "src" / "real_kernel.cpp",
+        """
+extern "C" __global__ void real_kernel(float* x) {}
+""",
+    )
+    _write(
+        tmp_path / "build" / "plain.py",
+        """
+def helper():
+    return 1
+""",
+    )
+    _write(
+        tmp_path / "build" / "generated_kernel.py",
+        """
+import triton
+
+@triton.jit
+def generated_kernel(x_ptr):
+    pass
+""",
+    )
+
+    data = _discover(tmp_path, kernel_type="all")
+    found = {entry["source_file"] for entry in data["kernels"]}
+
+    assert str(tmp_path / "src" / "real_kernel.cpp") in found
+    assert str(tmp_path / "build" / "generated_kernel.cpp") not in found
+    assert str(tmp_path / "build" / "plain.py") not in found
+    assert str(tmp_path / "build" / "generated_kernel.py") in found
