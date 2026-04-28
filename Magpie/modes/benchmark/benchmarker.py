@@ -31,6 +31,7 @@ from .result import BenchmarkResult, LatencyMetrics, ResultParser, ThroughputMet
 from .tracelens import TraceLensAnalyzer
 
 from ...utils.gpu import detect_gpu, find_idle_gpus, GPUVendor
+from ...utils.gpu_monitor import GPUMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +127,30 @@ class BenchmarkMode:
         # 4. Create workspace
         workspace = self.workspace_mgr.create(self.config.to_dict())
         
+        # 4b. Start GPU monitor if enabled
+        gpu_monitor = None
+        gpu_monitor_stats = None
+        if self.config.profiler.gpu_monitor.enabled:
+            monitor_cfg = self.config.profiler.gpu_monitor
+            device_id = monitor_cfg.device_id
+            if device_id is None:
+                # Auto-detect from GPU selection or default to 0
+                envs = self.config.envs or {}
+                visible = envs.get("HIP_VISIBLE_DEVICES") or envs.get("CUDA_VISIBLE_DEVICES") or envs.get("ROCR_VISIBLE_DEVICES")
+                if visible:
+                    device_id = int(visible.split(",")[0])
+                else:
+                    device_id = 0
+            gpu_monitor = GPUMonitor(
+                device_id=device_id,
+                interval_sec=monitor_cfg.interval_sec,
+            )
+            if gpu_monitor.start():
+                logger.info(f"GPU monitor started (device={device_id}, interval={monitor_cfg.interval_sec}s)")
+            else:
+                # Unsupported vendor, disable monitor
+                gpu_monitor = None
+        
         # 5-7. Build and execute (Docker or local)
         if self.config.is_local:
             local_cmd, local_env = self._build_local_command(
@@ -154,12 +179,21 @@ class BenchmarkMode:
             logger.debug(f"Docker command: {' '.join(docker_cmd)}")
             result, stdout, stderr = self._execute_benchmark(docker_cmd, workspace)
         
+        # 7b. Stop GPU monitor and collect stats
+        if gpu_monitor is not None:
+            gpu_monitor_stats = gpu_monitor.stop()
+            logger.info(f"GPU monitor stopped: {gpu_monitor_stats.sample_count} samples collected")
+        
         # 8. Collect results
         result.workspace_dir = str(workspace)
         result.execution_time = time.time() - start_time
         result.framework = self.config.framework
         result.model = self.config.model
         result.profiling_enabled = self.config.profiler.torch_profiler.enabled
+        
+        # Add GPU monitor stats
+        if gpu_monitor_stats is not None:
+            result.gpu_monitor = gpu_monitor_stats.to_dict()
         
         # Parse InferenceX output
         result_file = workspace / "inferencex_result.json"
@@ -969,9 +1003,15 @@ class BenchmarkMode:
             analyzer = GapAnalyzer(self.config.gap_analysis)
             result = analyzer.analyze(torch_trace_dir)
             
-            # Write merged CSV
+            # Write merged CSV (with optional kernel source enrichment)
             csv_path = gap_dir / "gap_analysis.csv"
-            result.to_csv(csv_path)
+            result.to_csv(
+                csv_path,
+                find_kernel_sources=self.config.gap_analysis.find_kernel_sources,
+                kernel_source_repos=self.config.gap_analysis.kernel_source_repos,
+                auto_clone_repos=self.config.gap_analysis.auto_clone_repos,
+                repos_base_dir=self.config.gap_analysis.repos_base_dir,
+            )
             logger.info(f"Wrote gap analysis CSV: {csv_path}")
             
             # Write per-rank CSVs if multiple ranks

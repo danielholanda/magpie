@@ -179,6 +179,42 @@ class TraceLensConfig:
 
 
 @dataclass
+class GPUMonitorConfig:
+    """
+    GPU hardware monitoring configuration.
+
+    Collects temperature, clock frequencies, and power consumption
+    during benchmark execution.
+
+    Attributes:
+        enabled: Whether GPU monitoring is enabled (default: True)
+        interval_sec: Sampling interval in seconds (default: 2.0)
+        device_id: GPU device to monitor (default: 0, or auto from benchmark)
+    """
+
+    enabled: bool = True
+    interval_sec: float = 2.0
+    device_id: Optional[int] = None  # None = auto-detect from benchmark
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            "enabled": self.enabled,
+            "interval_sec": self.interval_sec,
+            "device_id": self.device_id,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "GPUMonitorConfig":
+        """Create from dictionary."""
+        return cls(
+            enabled=data.get("enabled", True),
+            interval_sec=data.get("interval_sec", 2.0),
+            device_id=data.get("device_id"),
+        )
+
+
+@dataclass
 class ProfilerConfig:
     """
     Complete profiler configuration.
@@ -187,11 +223,13 @@ class ProfilerConfig:
         torch_profiler: PyTorch profiler settings (default enabled)
         system_profiler: System profiler settings (default disabled)
         tracelens: TraceLens trace analysis settings (default disabled)
+        gpu_monitor: GPU hardware monitoring settings (default enabled)
     """
 
     torch_profiler: TorchProfilerConfig = field(default_factory=TorchProfilerConfig)
     system_profiler: SystemProfilerConfig = field(default_factory=SystemProfilerConfig)
     tracelens: TraceLensConfig = field(default_factory=TraceLensConfig)
+    gpu_monitor: GPUMonitorConfig = field(default_factory=GPUMonitorConfig)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -199,6 +237,7 @@ class ProfilerConfig:
             "torch_profiler": self.torch_profiler.to_dict(),
             "system_profiler": self.system_profiler.to_dict(),
             "tracelens": self.tracelens.to_dict(),
+            "gpu_monitor": self.gpu_monitor.to_dict(),
         }
 
     @classmethod
@@ -207,6 +246,7 @@ class ProfilerConfig:
         torch_cfg = data.get("torch_profiler", {})
         sys_cfg = data.get("system_profiler", {})
         tracelens_cfg = data.get("tracelens", {})
+        gpu_monitor_cfg = data.get("gpu_monitor", {})
         return cls(
             torch_profiler=TorchProfilerConfig.from_dict(torch_cfg)
             if torch_cfg
@@ -217,6 +257,9 @@ class ProfilerConfig:
             tracelens=TraceLensConfig.from_dict(tracelens_cfg)
             if tracelens_cfg
             else TraceLensConfig(),
+            gpu_monitor=GPUMonitorConfig.from_dict(gpu_monitor_cfg)
+            if gpu_monitor_cfg
+            else GPUMonitorConfig(),
         )
 
 
@@ -235,6 +278,12 @@ class GapAnalysisConfig:
         min_duration_us: Filter out events shorter than this (microseconds)
         categories: Event categories to include (e.g., ["kernel", "gpu"]). None = all.
         ignore_categories: Event categories to exclude (default: ["gpu_user_annotation", "user_annotation"])
+        find_kernel_sources: Whether to find kernel source files and tests (default: False)
+        kernel_source_repos: List of repository paths to search for kernel sources.
+            If None and auto_clone_repos is True, repos are cloned on-demand based on kernel types.
+        auto_clone_repos: Whether to auto-clone missing repositories (default: True).
+            When enabled, required repos are detected from kernel names and cloned automatically.
+        repos_base_dir: Base directory for auto-cloned repos. Defaults to ~/.cache/magpie/repos/
     """
 
     enabled: bool = False
@@ -246,6 +295,10 @@ class GapAnalysisConfig:
     ignore_categories: Optional[List[str]] = field(
         default_factory=lambda: ["gpu_user_annotation", "user_annotation"]
     )
+    find_kernel_sources: bool = False
+    kernel_source_repos: Optional[List[str]] = None
+    auto_clone_repos: bool = True
+    repos_base_dir: Optional[str] = None
 
     def __post_init__(self):
         """Validate percentage range."""
@@ -271,6 +324,10 @@ class GapAnalysisConfig:
             "min_duration_us": self.min_duration_us,
             "categories": self.categories,
             "ignore_categories": self.ignore_categories,
+            "find_kernel_sources": self.find_kernel_sources,
+            "kernel_source_repos": self.kernel_source_repos,
+            "auto_clone_repos": self.auto_clone_repos,
+            "repos_base_dir": self.repos_base_dir,
         }
 
     @classmethod
@@ -284,6 +341,10 @@ class GapAnalysisConfig:
             min_duration_us=data.get("min_duration_us", 0.0),
             categories=data.get("categories", ["kernel", "gpu"]),
             ignore_categories=data.get("ignore_categories", ["gpu_user_annotation", "user_annotation"]),
+            find_kernel_sources=data.get("find_kernel_sources", False),
+            kernel_source_repos=data.get("kernel_source_repos"),
+            auto_clone_repos=data.get("auto_clone_repos", True),
+            repos_base_dir=data.get("repos_base_dir"),
         )
 
 

@@ -27,6 +27,11 @@ from .gpu import (
     load_gpu_config_from_dict,
     get_reset_after_benchmark,
 )
+from .gpu_monitor import (
+    GPUMonitor,
+    GPUMonitorStats,
+    GPUSample,
+)
 
 __all__ = [
     "get_updated_env",
@@ -40,6 +45,10 @@ __all__ = [
     # Multi GPU
     "MultiGPUConfig",
     "MultiGPUController",
+    # GPU Monitor
+    "GPUMonitor",
+    "GPUMonitorStats",
+    "GPUSample",
     # Functions
     "detect_gpu",
     "get_gpu_info",

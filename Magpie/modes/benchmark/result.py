@@ -144,6 +144,9 @@ class BenchmarkResult:
     # Gap analysis results
     gap_analysis: Optional[Dict[str, Any]] = None
     
+    # GPU hardware monitoring (temperature, frequency, power)
+    gpu_monitor: Optional[Dict[str, Any]] = None
+    
     # Execution info
     workspace_dir: str = ""
     execution_time: float = 0.0
@@ -167,6 +170,7 @@ class BenchmarkResult:
             "top_bottlenecks": self.top_bottlenecks,
             "tracelens_analysis": self.tracelens_analysis,
             "gap_analysis": self.gap_analysis,
+            "gpu_monitor": self.gpu_monitor,
             "workspace_dir": self.workspace_dir,
             "execution_time": self.execution_time,
             "profiling_enabled": self.profiling_enabled,
@@ -249,6 +253,20 @@ class BenchmarkResult:
                     )
                 if len(top_kernels) > 5:
                     lines.append(f"  ... and {len(top_kernels) - 5} more")
+
+        if self.gpu_monitor:
+            lines.extend(["", "GPU Hardware Monitoring:"])
+            gm = self.gpu_monitor
+            lines.append(f"  Samples: {gm.get('sample_count', 0)} ({gm.get('duration_sec', 0):.1f}s)")
+            temp = gm.get("temperature_c", {})
+            if temp:
+                lines.append(f"  Temperature: {temp.get('min', 0):.1f}°C - {temp.get('max', 0):.1f}°C (avg: {temp.get('avg', 0):.1f}°C)")
+            gpu_clk = gm.get("gpu_clock_mhz", {})
+            if gpu_clk:
+                lines.append(f"  GPU Clock: {gpu_clk.get('min', 0)} - {gpu_clk.get('max', 0)} MHz (avg: {gpu_clk.get('avg', 0):.0f})")
+            power = gm.get("power_watts", {})
+            if power:
+                lines.append(f"  Power: {power.get('min', 0):.1f} - {power.get('max', 0):.1f} W (avg: {power.get('avg', 0):.1f})")
 
         if self.errors:
             lines.extend([
