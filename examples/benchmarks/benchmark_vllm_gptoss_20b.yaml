@@ -42,6 +42,6 @@ benchmark:
   benchmark_script: "vllm_mi300x.sh"
 
   gap_analysis:
-    enabled: false
+    enabled: true
 
   timeout_seconds: 2700

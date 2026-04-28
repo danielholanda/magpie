@@ -36,6 +36,7 @@ class KernelStat:
     total_duration_us: float = 0.0
     calls: int = 0
     durations_us: List[float] = field(default_factory=list)
+    shapes: List[str] = field(default_factory=list)
 
     @property
     def avg_us(self) -> float:
@@ -52,6 +53,14 @@ class KernelStat:
     @property
     def std_us(self) -> float:
         return stdev(self.durations_us) if len(self.durations_us) > 1 else 0.0
+
+    @property
+    def unique_shapes(self) -> str:
+        """Return unique shapes as semicolon-separated string."""
+        if not self.shapes:
+            return ""
+        unique = list(dict.fromkeys(s for s in self.shapes if s))
+        return "; ".join(unique[:10]) if unique else ""
 
 
 @dataclass
@@ -89,6 +98,7 @@ class GapAnalysisResult:
                         k.total_duration_us / self.total_duration_us * 100.0
                         if self.total_duration_us > 0 else 0.0
                     ),
+                    "input_shapes": k.unique_shapes,
                 }
                 for k in self.merged_kernels
             ],
@@ -103,7 +113,7 @@ class GapAnalysisResult:
             writer = csv.writer(f)
             writer.writerow([
                 "Name", "Calls", "Self CUDA total (us)",
-                "Avg time (us)", "% Total",
+                "Avg time (us)", "% Total", "Input Shapes",
             ])
             for k in self.merged_kernels:
                 pct = (
@@ -116,6 +126,7 @@ class GapAnalysisResult:
                     f"{k.total_duration_us:.2f}",
                     f"{k.avg_us:.2f}",
                     f"{pct:.2f}",
+                    k.unique_shapes,
                 ])
         logger.info(f"Wrote gap analysis CSV: {output_path}")
         return output_path
@@ -129,7 +140,7 @@ class GapAnalysisResult:
                 writer = csv.writer(f)
                 writer.writerow([
                     "Name", "Calls", "Self CUDA total (us)",
-                    "Avg time (us)", "% Total",
+                    "Avg time (us)", "% Total", "Input Shapes",
                 ])
                 for k in rr.kernels:
                     pct = (
@@ -142,6 +153,7 @@ class GapAnalysisResult:
                         f"{k.total_duration_us:.2f}",
                         f"{k.avg_us:.2f}",
                         f"{pct:.2f}",
+                        k.unique_shapes,
                     ])
             paths.append(rank_path)
             logger.debug(f"Wrote per-rank CSV: {rank_path}")
@@ -309,14 +321,18 @@ class GapAnalyzer:
             f"({self.config.trace_start_pct}%-{self.config.trace_end_pct}%)"
         )
 
-        filtered = self._filter_by_category(windowed)
+        # Build External id -> Input Dims mapping from cpu_op events
+        shape_map = self._build_shape_map(windowed)
+        logger.debug(f"Rank {rank}: built shape map with {len(shape_map)} entries")
+
+        filtered = self._filter_by_category(windowed, shape_map)
         logger.debug(
             f"Rank {rank}: {len(filtered)} events after category filter"
         )
 
         if self.config.min_duration_us > 0:
             filtered = [
-                (n, d) for n, d in filtered
+                (n, d, s) for n, d, s in filtered
                 if d >= self.config.min_duration_us
             ]
 
@@ -329,6 +345,53 @@ class GapAnalyzer:
             total_duration_us=total_us,
             kernels=kernels,
         )
+
+    # -- shape extraction ---------------------------------------------------
+
+    @staticmethod
+    def _build_shape_map(events: List[Dict[str, Any]]) -> Dict[int, str]:
+        """
+        Build a mapping from External id to formatted Input Dims string.
+
+        Extracts shape info from cpu_op events that have Input Dims in args.
+        """
+        shape_map: Dict[int, str] = {}
+
+        for ev in events:
+            cat = (ev.get("cat") or "").lower()
+            if "cpu_op" not in cat:
+                continue
+
+            args = ev.get("args", {})
+            ext_id = args.get("External id")
+            input_dims = args.get("Input Dims")
+
+            if ext_id is not None and input_dims:
+                shape_str = GapAnalyzer._format_input_dims(input_dims)
+                if shape_str:
+                    shape_map[ext_id] = shape_str
+
+        return shape_map
+
+    @staticmethod
+    def _format_input_dims(input_dims: List[List[int]]) -> str:
+        """
+        Format Input Dims into a readable string.
+
+        Example: [[5, 2880], [2880, 201088]] -> "[5,2880]x[2880,201088]"
+        """
+        if not input_dims:
+            return ""
+
+        parts = []
+        for dim in input_dims:
+            if isinstance(dim, list) and dim:
+                parts.append("[" + ",".join(str(d) for d in dim) + "]")
+
+        if not parts:
+            return ""
+
+        return "x".join(parts)
 
     # -- time window --------------------------------------------------------
 
@@ -401,17 +464,21 @@ class GapAnalyzer:
     # -- category filtering -------------------------------------------------
 
     def _filter_by_category(
-        self, events: List[Dict[str, Any]]
-    ) -> List[Tuple[str, float]]:
+        self,
+        events: List[Dict[str, Any]],
+        shape_map: Optional[Dict[int, str]] = None,
+    ) -> List[Tuple[str, float, str]]:
         """
         Filter events by category using case-insensitive substring matching.
 
-        Returns list of (name, duration_us) tuples.
+        Returns list of (name, duration_us, shape_str) tuples.
+        Shape is looked up from shape_map using the event's External id.
         """
         allowed = self.config.categories
         ignored = self.config.ignore_categories
+        shape_map = shape_map or {}
 
-        result: List[Tuple[str, float]] = []
+        result: List[Tuple[str, float, str]] = []
         for ev in events:
             cat = (ev.get("cat") or "").lower()
 
@@ -423,7 +490,15 @@ class GapAnalyzer:
 
             name = ev.get("name", "<?>")
             dur_us = ev.get("dur", 0.0)
-            result.append((name, dur_us))
+
+            # Look up shape from External id
+            shape_str = ""
+            args = ev.get("args", {})
+            ext_id = args.get("External id")
+            if ext_id is not None and ext_id in shape_map:
+                shape_str = shape_map[ext_id]
+
+            result.append((name, dur_us, shape_str))
 
         return result
 
@@ -512,17 +587,19 @@ class GapAnalyzer:
 
     @staticmethod
     def _aggregate_stats(
-        events: List[Tuple[str, float]],
+        events: List[Tuple[str, float, str]],
     ) -> List[KernelStat]:
         """Aggregate events by name, sorted by total duration descending."""
         by_name: Dict[str, KernelStat] = {}
-        for name, dur_us in events:
+        for name, dur_us, shape_str in events:
             if name not in by_name:
                 by_name[name] = KernelStat(name=name)
             ks = by_name[name]
             ks.total_duration_us += dur_us
             ks.calls += 1
             ks.durations_us.append(dur_us)
+            if shape_str:
+                ks.shapes.append(shape_str)
 
         return sorted(by_name.values(), key=lambda k: -k.total_duration_us)
 
@@ -540,6 +617,7 @@ class GapAnalyzer:
                 m.total_duration_us += ks.total_duration_us
                 m.calls += ks.calls
                 m.durations_us.extend(ks.durations_us)
+                m.shapes.extend(ks.shapes)
 
         return sorted(merged.values(), key=lambda k: -k.total_duration_us)
 

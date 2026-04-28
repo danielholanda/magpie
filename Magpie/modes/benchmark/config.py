@@ -234,7 +234,7 @@ class GapAnalysisConfig:
         top_k: Number of top bottleneck events to include in the report
         min_duration_us: Filter out events shorter than this (microseconds)
         categories: Event categories to include (e.g., ["kernel", "gpu"]). None = all.
-        ignore_categories: Event categories to exclude (e.g., ["gpu_user_annotation"])
+        ignore_categories: Event categories to exclude (default: ["gpu_user_annotation", "user_annotation"])
     """
 
     enabled: bool = False
@@ -244,7 +244,7 @@ class GapAnalysisConfig:
     min_duration_us: float = 0.0
     categories: Optional[List[str]] = field(default_factory=lambda: ["kernel", "gpu"])
     ignore_categories: Optional[List[str]] = field(
-        default_factory=lambda: ["gpu_user_annotation"]
+        default_factory=lambda: ["gpu_user_annotation", "user_annotation"]
     )
 
     def __post_init__(self):
@@ -283,7 +283,7 @@ class GapAnalysisConfig:
             top_k=data.get("top_k", 20),
             min_duration_us=data.get("min_duration_us", 0.0),
             categories=data.get("categories", ["kernel", "gpu"]),
-            ignore_categories=data.get("ignore_categories", ["gpu_user_annotation"]),
+            ignore_categories=data.get("ignore_categories", ["gpu_user_annotation", "user_annotation"]),
         )
 
 

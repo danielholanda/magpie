@@ -895,15 +895,23 @@ def run_gap_analysis_standalone(args) -> int:
         return 1
 
     top_k = getattr(args, "top_k", 20)
-    gap_config = GapAnalysisConfig(
-        enabled=True,
-        trace_start_pct=args.start_pct,
-        trace_end_pct=args.end_pct,
-        top_k=top_k,
-        min_duration_us=args.min_duration_us,
-        categories=getattr(args, "categories", None),
-        ignore_categories=getattr(args, "ignore_categories", None),
-    )
+
+    # Build config kwargs, only including non-None values to preserve defaults
+    gap_kwargs = {
+        "enabled": True,
+        "trace_start_pct": args.start_pct,
+        "trace_end_pct": args.end_pct,
+        "top_k": top_k,
+        "min_duration_us": args.min_duration_us,
+    }
+    categories = getattr(args, "categories", None)
+    if categories is not None:
+        gap_kwargs["categories"] = categories
+    ignore_categories = getattr(args, "ignore_categories", None)
+    if ignore_categories is not None:
+        gap_kwargs["ignore_categories"] = ignore_categories
+
+    gap_config = GapAnalysisConfig(**gap_kwargs)
 
     # All output goes into a gap_analysis/ subfolder
     base_dir = getattr(args, "output_dir", None) or trace_dir.parent
@@ -922,7 +930,7 @@ def run_gap_analysis_standalone(args) -> int:
         return 1
 
     csv_path = result.to_csv(gap_dir / "gap_analysis.csv")
-    if len(result.rank_results) > 1:
+    if len(result.rank_results) > 1 and not getattr(args, "no_rank_csv", False):
         result.to_rank_csv(gap_dir)
 
     # Print summary
@@ -1250,6 +1258,10 @@ def create_parser() -> argparse.ArgumentParser:
     benchmark_parser.add_argument(
         "--ignore-categories", type=str, nargs="*", default=None,
         help="Gap analysis: event categories to exclude (e.g. gpu_user_annotation)",
+    )
+    benchmark_parser.add_argument(
+        "--no-rank-csv", action="store_true",
+        help="Gap analysis: skip generating per-rank CSV files",
     )
 
     return parser
