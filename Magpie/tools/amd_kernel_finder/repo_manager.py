@@ -23,17 +23,22 @@ REPO_URLS = {
     "triton": "https://github.com/triton-lang/triton.git",
     "vllm": "https://github.com/vllm-project/vllm.git",
     "pytorch": "https://github.com/pytorch/pytorch.git",
-    "rocm-systems": "https://github.com/ROCm/rocm-systems.git",
+    "rocm-systems": "https://github.com/ROCm/rocm-systems.git",  # ROCm super-repo (clr, hip, rocprofiler, etc)
+    "aiter": "https://github.com/ROCm/aiter.git",
 }
 
 KERNEL_REPO_MAP = {
     "triton_jit": ["triton"],
-    "ck_tile": ["rocm-libraries"],
+    "ck_tile": ["rocm-libraries", "aiter"],  # CK Tile has aiter wrapper
     "tensile_gemm": ["rocm-libraries"],
-    "hip_cpp": ["rocm-libraries"],
+    "hip_cpp": ["rocm-libraries", "vllm"],  # HIP kernels may be in vllm
     "aten_native": ["pytorch"],
     "inductor": ["pytorch"],
+    "aiter": ["aiter"],
 }
+
+# All repos to clone when force_all is True
+ALL_REPOS = ["rocm-libraries", "triton", "vllm", "pytorch", "aiter", "rocm-systems"]
 
 
 class RepoManager:
@@ -133,16 +138,20 @@ class RepoManager:
                 repos.update(KERNEL_REPO_MAP[kind])
         return list(repos)
     
-    def get_repos_for_kernels(self, kernel_names: List[str]) -> List[str]:
+    def get_repos_for_kernels(self, kernel_names: List[str], force_all: bool = False) -> List[str]:
         """
         Analyze kernel names and determine which repos to clone.
         
         Args:
             kernel_names: List of kernel names from profiler
+            force_all: If True, return all repos regardless of kernel types
             
         Returns:
             List of repo names needed
         """
+        if force_all:
+            return ALL_REPOS.copy()
+        
         from .parser import KernelNameParser
         
         parser = KernelNameParser()
@@ -165,6 +174,28 @@ class RepoManager:
             repos.add("vllm")
         
         return list(repos)
+    
+    def ensure_all_repos(self, shallow: bool = True) -> List[str]:
+        """
+        Ensure all known repositories are cloned.
+        
+        Args:
+            shallow: If True, use shallow clone
+            
+        Returns:
+            List of repo paths
+        """
+        logger.info(f"Cloning all repos: {ALL_REPOS}")
+        
+        paths = []
+        for repo_name in ALL_REPOS:
+            try:
+                path = self.ensure_repo(repo_name, shallow=shallow)
+                paths.append(path)
+            except Exception as e:
+                logger.warning(f"Failed to clone {repo_name}: {e}")
+        
+        return paths
     
     def ensure_repos_for_kernels(self, kernel_names: List[str], 
                                   shallow: bool = True) -> List[str]:

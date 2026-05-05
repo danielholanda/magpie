@@ -211,6 +211,8 @@ class KernelSourceSearcher:
             return self._search_hip_source(parsed)
         elif parsed.kind == KernelKind.INDUCTOR:
             return self._search_inductor_source(parsed)
+        elif parsed.kind == KernelKind.AITER:
+            return self._search_aiter_source(parsed)
         
         return None
     
@@ -238,6 +240,8 @@ class KernelSourceSearcher:
             return self._search_aten_test(parsed)
         elif parsed.kind == KernelKind.HIP_CPP:
             return self._search_hip_test(parsed, source)
+        elif parsed.kind == KernelKind.AITER:
+            return self._search_aiter_test(parsed, source)
         
         return None
     
@@ -372,17 +376,30 @@ class KernelSourceSearcher:
         if not ck_path.exists():
             return None
         
-        # Map operation name to directory
+        # Map operation name to directory and kernel file
         op_name = parsed.function_name.lower()
-        op_dirs = {
-            "rmsnorm2dfwd": "rmsnorm2d",
-            "fmha": "fmha",
-            "softmax": "softmax",
-            "gemm": "gemm",
+        op_info = {
+            "rmsnorm2dfwd": ("rmsnorm2d", "kernel/rmsnorm2d_fwd_kernel.hpp"),
+            "rmsnorm": ("rmsnorm2d", "kernel/rmsnorm2d_fwd_kernel.hpp"),
+            "fmha": ("fmha", "kernel/fmha_fwd_kernel.hpp"),
+            "softmax": ("softmax", "kernel/softmax_kernel.hpp"),
+            "gemm": ("gemm", "kernel/gemm_kernel.hpp"),
+            "layernorm": ("layernorm2d", "kernel/layernorm2d_fwd_kernel.hpp"),
+            "moe": ("moe_sorting_topk", "kernel/moe_sorting_kernel.hpp"),
         }
         
-        for op_key, op_dir in op_dirs.items():
+        for op_key, (op_dir, kernel_file) in op_info.items():
             if op_key in op_name:
+                # Try specific kernel file first
+                kernel_path = f"projects/composablekernel/include/ck_tile/ops/{op_dir}/{kernel_file}"
+                if (Path(rocm_libs) / kernel_path).exists():
+                    return SourceMatch(
+                        file_path=kernel_path,
+                        symbol=f"ck_tile::{op_dir}_kernel",
+                        repo_name="rocm-libraries",
+                        repo_var="$ROCM_LIBRARIES_DIR",
+                    )
+                # Fall back to directory
                 op_path = f"projects/composablekernel/include/ck_tile/ops/{op_dir}/"
                 if (Path(rocm_libs) / op_path).exists():
                     return SourceMatch(
@@ -452,15 +469,30 @@ class KernelSourceSearcher:
             "gelu": ("csrc/activation_kernels.cu", "gelu_kernel", "$VLLM_DIR"),
             # rocBLAS / BLAS
             "rocblas": ("projects/rocblas/library/src/", "rocBLAS kernel", "$ROCM_LIBRARIES_DIR"),
-            # ROCm system kernels
-            "rocclr_copy": ("projects/clr/rocclr/device/blitcl.cpp", "ROCclr blit", "$ROCM_SYSTEMS_DIR"),
-            "__amd_rocclr": ("projects/clr/rocclr/device/blitcl.cpp", "ROCclr blit", "$ROCM_SYSTEMS_DIR"),
         }
+        
+        # Check for ROCm runtime kernels (in rocm-systems super-repo)
+        if "__amd_rocclr" in original_name or "rocclr_copy" in original_name:
+            return SourceMatch(
+                file_path="projects/clr/rocclr/device/blit.cpp",
+                symbol="ROCm runtime blit kernel",
+                repo_name="rocm-systems",
+                repo_var="$ROCM_SYSTEMS_DIR",
+            )
+        
+        # HIP memory copy operations (internal runtime)
+        if original_name.startswith("MEMORY_COPY"):
+            return SourceMatch(
+                file_path="projects/clr/hipamd/src/hip_memory.cpp",
+                symbol="HIP memory copy",
+                repo_name="rocm-systems",
+                repo_var="$ROCM_SYSTEMS_DIR",
+            )
         
         # Check known mappings
         for key, (path, symbol, repo_var) in known_hip_mappings.items():
             if key in original_name or key in function_name:
-                repo_name = "vllm" if repo_var == "$VLLM_DIR" else "rocm-libraries" if "ROCM_LIBRARIES" in repo_var else "rocm-systems"
+                repo_name = "vllm" if repo_var == "$VLLM_DIR" else "rocm-libraries"
                 return SourceMatch(
                     file_path=path,
                     symbol=symbol,
@@ -506,6 +538,35 @@ class KernelSourceSearcher:
                            source: Optional[SourceMatch]) -> Optional[TestMatch]:
         """Search for Triton kernel tests."""
         function_name = parsed.function_name
+        
+        # If source is from aiter, use aiter test mappings
+        if source and source.repo_name == "aiter":
+            aiter_test_mappings = {
+                "rmsnorm": ("op_tests/test_rmsnorm2d.py", "cd $AITER_DIR && pytest op_tests/test_rmsnorm2d.py -v"),
+                "layernorm": ("op_tests/test_layernorm.py", "cd $AITER_DIR && pytest op_tests/test_layernorm.py -v"),
+                "attention": ("op_tests/test_mha.py", "cd $AITER_DIR && pytest op_tests/test_mha.py -v"),
+                "mha": ("op_tests/test_mha.py", "cd $AITER_DIR && pytest op_tests/test_mha.py -v"),
+                "moe": ("op_tests/test_moe.py", "cd $AITER_DIR && pytest op_tests/test_moe.py -v"),
+                "quant": ("op_tests/test_quant.py", "cd $AITER_DIR && pytest op_tests/test_quant.py -v"),
+                "gemm": ("op_tests/test_gemm_a8w8.py", "cd $AITER_DIR && pytest op_tests/test_gemm_a8w8.py -v"),
+                "rope": ("op_tests/test_rope.py", "cd $AITER_DIR && pytest op_tests/test_rope.py -v"),
+            }
+            
+            fn_lower = function_name.lower()
+            for key, (test_file, test_cmd) in aiter_test_mappings.items():
+                if key in fn_lower:
+                    return TestMatch(
+                        test_file=test_file,
+                        test_cmd=test_cmd,
+                        repo_var="$AITER_DIR",
+                    )
+            
+            # Default aiter test
+            return TestMatch(
+                test_file="op_tests/",
+                test_cmd="cd $AITER_DIR && pytest op_tests/ -v",
+                repo_var="$AITER_DIR",
+            )
         
         # Known test mappings for common kernels
         # Note: $TRITON_KERNELS_DIR = triton/python/triton_kernels/
@@ -644,9 +705,15 @@ class KernelSourceSearcher:
             "rotary_embedding": ("tests/kernels/test_pos_encoding.py", "cd $VLLM_DIR && pytest tests/kernels/test_pos_encoding.py -v", "$VLLM_DIR"),
             "rms_norm": ("tests/kernels/test_layernorm.py", "cd $VLLM_DIR && pytest tests/kernels/test_layernorm.py -v", "$VLLM_DIR"),
             "silu_and_mul": ("tests/kernels/test_activation.py", "cd $VLLM_DIR && pytest tests/kernels/test_activation.py -v", "$VLLM_DIR"),
-            # ROCm system
-            "rocclr_copy": ("tests/catch/unit/memory/", "cd $ROCM_SYSTEMS_DIR && ctest -R hipMemcpy", "$ROCM_SYSTEMS_DIR"),
         }
+        
+        # Check for ROCm runtime kernels (in rocm-systems)
+        if "__amd_rocclr" in original_name or "rocclr_copy" in original_name or original_name.startswith("MEMORY_COPY"):
+            return TestMatch(
+                test_file="projects/hip-tests/catch/unit/memory/",
+                test_cmd="cd $ROCM_SYSTEMS_DIR && ctest -R hipMemcpy",
+                repo_var="$ROCM_SYSTEMS_DIR",
+            )
         
         # Check known mappings
         for key, (test_file, test_cmd, repo_var) in known_hip_test_mappings.items():
@@ -672,3 +739,131 @@ class KernelSourceSearcher:
             )
         
         return None
+    
+    def _search_aiter_source(self, parsed: ParsedKernelName) -> Optional[SourceMatch]:
+        """Search for aiter kernel source."""
+        function_name = parsed.function_name
+        original_name = parsed.original_name
+        extra = parsed.extra or {}
+        category = extra.get('category', '')
+        
+        # Known aiter kernel mappings
+        known_mappings = {
+            # Quantization kernels
+            'dynamic_per_group_scaled_quant': ('aiter/ops/quant.py', 'dynamic_per_group_scaled_quant'),
+            'dynamic_per_token_scaled_quant': ('aiter/ops/quant.py', 'dynamic_per_token_scaled_quant'),
+            'group_fp8_quant': ('aiter/ops/quant.py', 'group_fp8_quant'),
+            # MoE kernels
+            'fmoe': ('aiter/fused_moe.py', 'fused_moe'),
+            'moe_sorting': ('aiter/ops/moe_sorting.py', 'moe_sorting'),
+            'moe_align': ('csrc/kernels/moe_align_block_size_kernels.cu', 'moe_align'),
+            # GEMM kernels
+            'gemm_a8w8': ('aiter/ops/gemm_op_a8w8.py', 'gemm_a8w8'),
+            'gemm_a4w4': ('aiter/ops/gemm_op_a4w4.py', 'gemm_a4w4'),
+            'batched_gemm': ('aiter/ops/batched_gemm_op_a8w8.py', 'batched_gemm'),
+            # Attention kernels
+            'mha': ('aiter/ops/mha.py', 'mha'),
+            'mla': ('aiter/mla.py', 'mla'),
+            'paged_attention': ('aiter/paged_attn.py', 'paged_attn'),
+            # Norm kernels
+            'rmsnorm': ('aiter/ops/rmsnorm.py', 'rmsnorm'),
+            'groupnorm': ('aiter/ops/groupnorm.py', 'groupnorm'),
+            # Rope kernels
+            'rotary': ('aiter/rotary_embedding.py', 'rotary_embedding'),
+            'rope': ('aiter/ops/rope.py', 'rope'),
+        }
+        
+        # Check known mappings
+        for key, (path, symbol) in known_mappings.items():
+            if key in function_name.lower() or key in original_name.lower():
+                return SourceMatch(
+                    file_path=path,
+                    symbol=symbol,
+                    repo_name="aiter",
+                    repo_var="$AITER_DIR",
+                )
+        
+        # Fall back based on category
+        category_paths = {
+            'quant': 'aiter/ops/quant.py',
+            'moe': 'aiter/fused_moe.py',
+            'gemm': 'aiter/ops/gemm_op_a8w8.py',
+            'attention': 'aiter/ops/mha.py',
+            'norm': 'aiter/ops/rmsnorm.py',
+        }
+        
+        if category in category_paths:
+            return SourceMatch(
+                file_path=category_paths[category],
+                symbol=function_name,
+                repo_name="aiter",
+                repo_var="$AITER_DIR",
+            )
+        
+        # Default: search in aiter/ops
+        return SourceMatch(
+            file_path="aiter/ops/",
+            symbol=function_name,
+            repo_name="aiter",
+            repo_var="$AITER_DIR",
+        )
+    
+    def _search_aiter_test(self, parsed: ParsedKernelName,
+                           source: Optional[SourceMatch]) -> Optional[TestMatch]:
+        """Search for aiter kernel tests."""
+        function_name = parsed.function_name
+        original_name = parsed.original_name
+        extra = parsed.extra or {}
+        category = extra.get('category', '')
+        
+        # Known test mappings
+        test_mappings = {
+            'quant': ('op_tests/test_quant.py', 'quant'),
+            'moe': ('op_tests/test_moe.py', 'moe'),
+            'gemm': ('op_tests/test_gemm_a8w8.py', 'gemm'),
+            'attention': ('op_tests/test_mha.py', 'mha'),
+            'norm': ('op_tests/test_rmsnorm2d.py', 'rmsnorm'),
+            'rope': ('op_tests/test_rope.py', 'rope'),
+        }
+        
+        # Check by category
+        if category in test_mappings:
+            test_file, keyword = test_mappings[category]
+            return TestMatch(
+                test_file=test_file,
+                test_cmd=f"cd $AITER_DIR && pytest {test_file} -v -k {keyword}",
+                repo_var="$AITER_DIR",
+            )
+        
+        # Check by keywords in function name
+        if 'quant' in function_name.lower():
+            return TestMatch(
+                test_file="op_tests/test_quant.py",
+                test_cmd="cd $AITER_DIR && pytest op_tests/test_quant.py -v",
+                repo_var="$AITER_DIR",
+            )
+        elif 'moe' in function_name.lower() or 'fmoe' in function_name.lower():
+            return TestMatch(
+                test_file="op_tests/test_moe.py",
+                test_cmd="cd $AITER_DIR && pytest op_tests/test_moe.py -v",
+                repo_var="$AITER_DIR",
+            )
+        elif 'gemm' in function_name.lower():
+            return TestMatch(
+                test_file="op_tests/test_gemm_a8w8.py",
+                test_cmd="cd $AITER_DIR && pytest op_tests/test_gemm_a8w8.py -v",
+                repo_var="$AITER_DIR",
+            )
+        elif 'mha' in function_name.lower() or 'attention' in function_name.lower():
+            return TestMatch(
+                test_file="op_tests/test_mha.py",
+                test_cmd="cd $AITER_DIR && pytest op_tests/test_mha.py -v",
+                repo_var="$AITER_DIR",
+            )
+        
+        # Default test
+        return TestMatch(
+            test_file="op_tests/",
+            test_cmd="cd $AITER_DIR && pytest op_tests/ -v",
+            repo_var="$AITER_DIR",
+        )
